@@ -2,6 +2,10 @@ import pandas as pd
 import numpy as np
 import seaborn as sns
 import matplotlib.pyplot as plt
+from sklearn import linear_model, preprocessing
+from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn import feature_selection, metrics
+from sklearn.preprocessing import StandardScaler
 
 
 def load_data(file_path):
@@ -122,7 +126,7 @@ def preprocess_data(file_path):
 def plot_age_impact(df):
     """Plot the impact of age on readmission."""
     plt.figure(figsize=(12, 6))
-    age_plot = sns.barplot(x='age', y='readmitted', data=df, palette="coolwarm", hue='age', legend=False)
+    age_plot = sns.barplot(x='age', y='readmitted', data=df, palette="coolwarm", hue='age')
     age_plot.set_title('Impact of Age on Readmission Rates')
     age_plot.set_xlabel('Age Group')
     age_plot.set_ylabel('Readmission Rate')
@@ -134,7 +138,7 @@ def plot_age_impact(df):
 def plot_race_impact(df):
     """Plot the impact of race on readmission."""
     plt.figure(figsize=(12, 6))
-    race_plot = sns.barplot(x='race', y='readmitted', data=df, palette="muted", hue='race', legend=False)
+    race_plot = sns.barplot(x='race', y='readmitted', data=df, palette="muted", hue='race')
     race_plot.set_title('Readmission Rates by Race')
     race_plot.set_xlabel('Race')
     race_plot.set_ylabel('Readmission Rate')
@@ -146,7 +150,7 @@ def plot_race_impact(df):
 def plot_gender_impact(df):
     """Plot the impact of gender on readmission."""
     plt.figure(figsize=(12, 6))
-    gender_plot = sns.barplot(x='gender', y='readmitted', data=df, palette="pastel", hue='gender', legend=False)
+    gender_plot = sns.barplot(x='gender', y='readmitted', data=df, palette="pastel", hue='gender')
     gender_plot.set_title('Readmission Rates by Gender')
     gender_plot.set_xlabel('Gender')
     gender_plot.set_ylabel('Readmission Rate')
@@ -183,6 +187,52 @@ def plot_diagnosis_category_impact(df):
     plt.show()
 
 
+def split_data(processed_data):
+    """Split the data into training and testing sets."""
+    test = processed_data.sample(frac=0.2, random_state=42)
+    train = processed_data.drop(test.index)
+    return test, train
+
+
+def model_train(mdl, df):
+    """Train the model using the training set."""
+    X = df.loc[:, df.columns != 'readmitted']
+    y = df['readmitted']
+    mdl.fit(X, y)
+    print(' {}'.format(mdl.intercept_))
+    print(' {}'.format(mdl.coef_))
+    # print(f"Accuracy: {mdl.score(X, y)}")
+    return mdl
+
+
+def model_test(mdl, df):
+    """Test the model using the testing set."""
+    X = df.loc[:, df.columns != 'readmitted']
+    y = df['readmitted']
+    y_pred = mdl.predict(X)
+    print(f"Accuracy: {metrics.accuracy_score(y, y_pred)}")
+    print(f"Confusion Matrix:\n {metrics.confusion_matrix(y, y_pred)}")
+    print(f"Cross Validation Score: {cross_val_score(model, X, y, cv=5)}")
+
+
+def recursive_feature_elimination(df):
+    """Apply recursive feature elimination to the dataset."""
+    X = df.loc[:, df.columns != 'readmitted']
+    y = df['readmitted']
+    # Standardize the features
+    standardizer = StandardScaler()
+    X0 = standardizer.fit_transform(X)
+    X0 = pd.DataFrame(X0, index=X.index, columns=X.columns)
+    # Apply RFE
+    mod = linear_model.LogisticRegression()
+    selector = feature_selection.RFE(mod, n_features_to_select=5, verbose=0, step=1)
+    selector = selector.fit(X0, y)
+    r_features = X.loc[:, selector.support_]
+    print("R features are:\n{}".format(','.join(list(r_features))))
+    r_features['readmitted'] = df.loc[:, df.columns == 'readmitted']
+    return r_features
+
+
 if __name__ == "__main__":
     file_path = 'diabetic_data.csv'
     sns.set(style="whitegrid")
@@ -200,3 +250,14 @@ if __name__ == "__main__":
     plot_race_impact(processed_data)
     plot_gender_impact(processed_data)
     plot_diagnosis_category_impact(processed_data)
+
+    # Model Building
+    model = linear_model.LogisticRegression()
+    subset = ['num_medications', 'number_outpatient', 'number_emergency', 'time_in_hospital', 'number_inpatient',
+              'encounter_id', 'age', 'num_lab_procedures', 'number_diagnoses', 'num_procedures', 'readmitted']
+    rfe_subset_data = recursive_feature_elimination(processed_data[subset])
+    test_set, training_set = split_data(rfe_subset_data)
+    # Training the model
+    model = model_train(model, training_set)
+    # Testing the model
+    model_test(model, test_set)
