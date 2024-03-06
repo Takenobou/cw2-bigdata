@@ -187,10 +187,18 @@ def plot_diagnosis_category_impact(df):
     plt.show()
 
 
-def split_data(processed_data):
+def split_data(pd):
     """Split the data into training and testing sets."""
-    test = processed_data.sample(frac=0.2, random_state=42)
-    train = processed_data.drop(test.index)
+    # test = processed_data.sample(frac=0.2, random_state=42)
+    # train = processed_data.drop(test.index)
+
+    train,test = train_test_split(pd, test_size=0.2, shuffle=True, random_state=93, stratify=pd['readmitted'])
+    print(f"Train shape: {train.shape}")
+    print(f"Readmitted in Train set:\n {train['readmitted'].value_counts()}")
+    print(f"Percentage of Readmitted in Train set:\n {train['readmitted'].value_counts(normalize=True)}")
+    print(f"Test shape: {test.shape}")
+    print(f"Readmitted in Test set:\n {test['readmitted'].value_counts()}")
+    print(f"Percentage of Readmitted in Test set:\n {test['readmitted'].value_counts(normalize=True)}")
     return test, train
 
 
@@ -209,7 +217,7 @@ def model_test(mdl, df):
     """Test the model using the testing set."""
     X = df.loc[:, df.columns != 'readmitted']
     y = df['readmitted']
-    y_pred = mdl.predict(X)
+    y_pred = mdl.predict_proba(X)[:, 1]>=0.5
     print(f"Accuracy: {metrics.accuracy_score(y, y_pred)}")
     print(f"Confusion Matrix:\n {metrics.confusion_matrix(y, y_pred)}")
     print(f"Cross Validation Score: {cross_val_score(model, X, y, cv=5)}")
@@ -225,7 +233,7 @@ def recursive_feature_elimination(df):
     X0 = pd.DataFrame(X0, index=X.index, columns=X.columns)
     # Apply RFE
     mod = linear_model.LogisticRegression()
-    selector = feature_selection.RFE(mod, n_features_to_select=5, verbose=0, step=1)
+    selector = feature_selection.RFE(mod, n_features_to_select=2, verbose=0, step=1)
     selector = selector.fit(X0, y)
     r_features = X.loc[:, selector.support_]
     print("R features are:\n{}".format(','.join(list(r_features))))
