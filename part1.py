@@ -109,7 +109,6 @@ def preprocess_data(file_path):
     shape_before = df.shape
 
     replace_missing_values(df)
-    impute_missing_values(df)
 
     numeric_df = df.select_dtypes(include=[np.number])
 
@@ -267,30 +266,6 @@ def recursive_feature_elimination(df):
     r_features = r_features.copy()  # Ensure r_features is a copy, not a view
     r_features['readmitted'] = df.loc[:, df.columns == 'readmitted']
     return r_features
-
-
-def impute_missing_values(df, n_neighbors=5):
-    """Impute missing values using KNN for numerical and most_frequent for categorical columns."""
-
-    # Separate the dataframe into numerical and categorical features for different imputation strategies
-    numerical_df = df.select_dtypes(include=[np.number])
-    categorical_df = df.select_dtypes(exclude=[np.number])
-
-    # Impute numerical features using KNN
-    imputer_num = KNNImputer(n_neighbors=n_neighbors)
-    numerical_df_imputed = pd.DataFrame(imputer_num.fit_transform(numerical_df), columns=numerical_df.columns)
-
-    # Impute categorical features using the most frequent value which is mode of the feature
-    imputer_cat = SimpleImputer(strategy='most_frequent')
-    categorical_df_imputed = pd.DataFrame(imputer_cat.fit_transform(categorical_df), columns=categorical_df.columns)
-
-    # Combine the imputed dataframes back together
-    imputed_df = pd.concat([numerical_df_imputed, categorical_df_imputed], axis=1)
-
-    # Restore the original order of columns
-    imputed_df = imputed_df[df.columns]
-
-    return imputed_df
 
 
 def find_optimal_clusters(data):
