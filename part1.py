@@ -2,14 +2,19 @@ import pandas as pd
 import numpy as np
 import seaborn as sns
 import matplotlib.pyplot as plt
+from imblearn.over_sampling import SMOTE
 from sklearn import linear_model, preprocessing
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.impute import SimpleImputer, KNNImputer
-from sklearn.model_selection import train_test_split, cross_val_score, GridSearchCV
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score
+from sklearn.model_selection import train_test_split, cross_val_score, GridSearchCV, KFold
 from sklearn import feature_selection, metrics
 from sklearn.preprocessing import StandardScaler, PolynomialFeatures
+from sklearn.svm import SVC
+from xgboost import XGBClassifier
 
 
 def load_data(file_path):
@@ -109,18 +114,12 @@ def preprocess_data(file_path):
     shape_before = df.shape
 
     replace_missing_values(df)
-
-    numeric_df = df.select_dtypes(include=[np.number])
-
-    kmeans = KMeans(n_clusters=3, random_state=42)
-    df['cluster'] = kmeans.fit_predict(numeric_df)
-
     drop_high_missing_columns(df)
     drop_low_variance_columns(df)
     transform_age_ranges(df)
     replace_missing_diagnoses(df)
-    engineer_features(df)
-    reduce_dimensions(df, n_components=0.95)
+    # engineer_features(df)
+    # reduce_dimensions(df, n_components=0.95)
     drop_all_missing_rows(df)
 
     # Map diagnosis codes to categories
@@ -131,7 +130,7 @@ def preprocess_data(file_path):
     df = remove_outliers(df, numerical_features)
     remove_duplicate_patients(df)
     normalize_features(df)
-    df = apply_pca(df, n_components=0.95)
+    # df = apply_pca(df, n_components=0.95)
 
     shape_after = df.shape
     return df, shape_before, shape_after, numerical_features, categorical_features
@@ -259,7 +258,7 @@ def recursive_feature_elimination(df):
     X0 = pd.DataFrame(X0, index=X.index, columns=X.columns)
     # Apply RFE
     mod = linear_model.LogisticRegression()
-    selector = feature_selection.RFE(mod, n_features_to_select=2, verbose=0, step=1)
+    selector = feature_selection.RFE(mod, n_features_to_select=12, verbose=1, step=1)
     selector = selector.fit(X0, y)
     r_features = X.loc[:, selector.support_]
     print("R features are:\n{}".format(','.join(list(r_features))))
@@ -305,7 +304,7 @@ def engineer_features(df):
         df[f'poly_{col_name}'] = poly_features[:, i]
 
     # Clustering-based features
-    kmeans = KMeans(n_clusters=4, random_state=42)
+    kmeans = KMeans(n_clusters=3, random_state=42)
     df['cluster'] = kmeans.fit_predict(df[['medical_history_complexity_standardized', 'num_medications']])
 
     # Dynamic quantile for high risk with refined approach
@@ -359,6 +358,14 @@ def apply_pca(df, n_components=None):
     return df
 
 
+def normalize_data_min_max(df, numerical_features):
+    """Normalize numerical features using Min-Max Scaling."""
+    df_numerical = df[numerical_features]
+    df_normalized = (df_numerical - df_numerical.min()) / (df_numerical.max() - df_numerical.min())
+    df[df_numerical.columns] = df_normalized
+    return df
+
+
 if __name__ == "__main__":
     file_path = 'diabetic_data.csv'
     sns.set(style="whitegrid")
@@ -370,6 +377,9 @@ if __name__ == "__main__":
     print(f"Shape after preprocessing: {shape_after}")
     print(f"Numerical features: {numerical_features}")
     print(f"Categorical features: {categorical_features}")
+
+    # Normalize data
+    processed_data = normalize_data_min_max(processed_data, numerical_features)
 
     # Data exploration
     transform_readmitted_column(processed_data)
@@ -384,26 +394,142 @@ if __name__ == "__main__":
     rfe_subset_data = recursive_feature_elimination(processed_data[subset])
     test_set, training_set = split_data(rfe_subset_data)
 
-    # First, we train and test the Logistic Regression Model
+    # Handling imbalance with SMOTE
+    sm = SMOTE(random_state=42)
+    X_train, y_train = sm.fit_resample(training_set.drop('readmitted', axis=1), training_set['readmitted'])
+
+    # Train and test the Logistic Regression Model
     print("Training and testing Logistic Regression Model...")
-    lr_model = linear_model.LogisticRegression()
-    lr_model = model_train(lr_model, training_set)
-    model_test(lr_model, test_set)
+    lr_model = LogisticRegression(max_iter=400)
+    lr_model.fit(X_train, y_train)
+    print("Model training completed.")
 
-    # Now, we perform GridSearchCV for the Random Forest model to find the best parameters
-    print("\nStarting GridSearchCV for Random Forest...")
-    param_grid = {
-        'n_estimators': [100, 200, 300, 400],
-        'max_depth': [None, 5, 10, 15],
-        'min_samples_split': [2, 5, 10]
-    }
-    grid_search = GridSearchCV(RandomForestClassifier(random_state=42), param_grid, cv=5, verbose=1, n_jobs=-1)
-    grid_search.fit(training_set.loc[:, training_set.columns != 'readmitted'], training_set['readmitted'])
-    print(f"Best parameters: {grid_search.best_params_}")
-    print(f"Best score: {grid_search.best_score_}")
+    # Test Logistic Regression Model
+    X_test = test_set.drop('readmitted', axis=1)
+    y_test = test_set['readmitted']
+    y_pred_lr = lr_model.predict(X_test)
+    print("Accuracy score for training data is: {:4.3f}".format(lr_model.score(X_train, y_train)))
+    print("Accuracy score for test data: {:4.3f}".format(lr_model.score(X_train, y_train)))
 
-    # After finding the best parameters, we directly use the best estimator for further evaluation
-    rf_model = grid_search.best_estimator_
+    # Train and test the Random Forest Model
+    print("Training and testing Random Forest Model...")
+    crf = RandomForestClassifier(n_estimators=400, min_samples_leaf=5, max_depth=30, random_state=42, oob_score=True)
+    crf.fit(X_train, y_train)
+    print("Model training completed.")
+    print("Accuracy score for training data is: {:4.3f}".format(crf.score(X_train, y_train)))
+    print("Accuracy score for test data: {:4.3f}".format(crf.score(X_train, y_train)))
+    print("The Oob score is: {:4.3f}".format(crf.oob_score_))
 
-    print("\nEvaluating the Random Forest model with the best parameters...")
-    model_test(rf_model, test_set)
+    # Test Random Forest Model
+    y_pred_rf = crf.predict(X_test)
+    # print("Accuracy of Random Forest Model:", accuracy_score(y_test, y_pred_rf))
+
+    # # Now, we perform GridSearchCV for the Random Forest model to find the best parameters
+    # print("\nStarting GridSearchCV for Random Forest...")
+    # param_grid = {
+    #     'n_estimators': [25, 40, 50, 100],
+    #     'max_depth': [None, 1, 2, 3, 5],
+    #     'min_samples_split': [2, 3, 5],
+    #     'min_samples_leaf': [1, 2, 4, 6],
+    #     'max_features': ['log2', 'sqrt'],
+    #     'bootstrap': [True, False]
+    # }
+    # grid_search = GridSearchCV(RandomForestClassifier(random_state=42), param_grid, cv=5, verbose=1, n_jobs=-1,
+    #                            scoring='accuracy')
+    # grid_search.fit(training_set.loc[:, training_set.columns != 'readmitted'], training_set['readmitted'])
+    # print(f"Best parameters: {grid_search.best_params_}")
+    # print(f"Best score: {grid_search.best_score_}")
+    #
+    # # After finding the best parameters, we directly use the best estimator for further evaluation
+    # rf_model = grid_search.best_estimator_
+    #
+    # print("\nEvaluating the Random Forest model with the best parameters...")
+    # model_test(rf_model, test_set)
+
+    # # Define the parameter grid for XGBoost
+    # param_grid_xgb = {
+    #     'n_estimators': [10, 25, 40, 50, 100],
+    #     'max_depth': [3, 6, 8],
+    #     'learning_rate': [0.001, 0.005, 0.01],
+    #     'subsample': [0.4, 0.6, 0.8],
+    #     'colsample_bytree': [0.4, 0.6, 0.8],
+    #     'gamma': [0.01, 0.05, 0.1, 0.2],
+    # }
+    #
+    # # Initialize the XGBoost classifier
+    # xgb_model = XGBClassifier(random_state=42, eval_metric='logloss')
+    #
+    # # GridSearchCV to find the best parameters for XGBoost
+    # grid_search_xgb = GridSearchCV(estimator=xgb_model, param_grid=param_grid_xgb, cv=5, verbose=1, n_jobs=-1, scoring='accuracy')
+    #
+    # # Fit GridSearchCV
+    # print("\nStarting GridSearchCV for XGBoost...")
+    # grid_search_xgb.fit(training_set.loc[:, training_set.columns != 'readmitted'], training_set['readmitted'])
+    #
+    # # Best parameters and score
+    # print(f"Best parameters: {grid_search_xgb.best_params_}")
+    # print(f"Best score: {grid_search_xgb.best_score_}")
+    #
+    # # Use the best estimator for further evaluations
+    # best_xgb_model = grid_search_xgb.best_estimator_
+    #
+    # # Assuming model_test function is updated to accept X and y directly
+    # print("\nEvaluating the XGBoost model with the best parameters...")
+    # model_test(best_xgb_model, test_set)
+    #
+    # # Define the parameter grid for SVM
+    # param_grid_svm = {
+    #     'C': [0.1, 1, 10],  # Regularization parameter
+    #     'gamma': ['scale', 'auto'],  # Kernel coefficient for 'rbf', 'poly', and 'sigmoid'
+    #     'kernel': ['rbf', 'linear']  # Specifies the kernel type to be used in the algorithm
+    # }
+    #
+    # # Initialize the SVM classifier
+    # svm_model = SVC(random_state=42)
+    #
+    # # GridSearchCV to find the best parameters for SVM
+    # grid_search_svm = GridSearchCV(estimator=svm_model, param_grid=param_grid_svm, cv=5, verbose=1, n_jobs=-1,
+    #                                scoring='accuracy')
+    #
+    # print("\nStarting GridSearchCV for SVM...")
+    # grid_search_svm.fit(training_set.loc[:, training_set.columns != 'readmitted'], training_set['readmitted'])
+    #
+    # # Best parameters and score
+    # print(f"Best parameters: {grid_search_svm.best_params_}")
+    # print(f"Best score: {grid_search_svm.best_score_}")
+    #
+    # # Use the best estimator for further evaluations
+    # best_svm_model = grid_search_svm.best_estimator_
+    #
+    # print("\nEvaluating the SVM model with the best parameters...")
+    # model_test(best_svm_model, test_set)
+    #
+    # # Define the parameter grid for Gradient Boosting
+    # param_grid_gb = {
+    #     'n_estimators': [25, 50, 75, 100 , 200],
+    #     'learning_rate': [0.01, 0.1, 0.2],
+    #     'max_depth': [3, 4, 5],
+    #     'min_samples_split': [2, 3, 4],
+    #     'min_samples_leaf': [1, 2, 3]
+    # }
+    #
+    # # Initialize the Gradient Boosting classifier
+    # gb_model = GradientBoostingClassifier(random_state=42)
+    #
+    # # GridSearchCV to find the best parameters for Gradient Boosting
+    # grid_search_gb = GridSearchCV(estimator=gb_model, param_grid=param_grid_gb, cv=5, verbose=1, n_jobs=-1,
+    #                               scoring='accuracy')
+    #
+    # print("\nStarting GridSearchCV for Gradient Boosting...")
+    # grid_search_gb.fit(training_set.loc[:, training_set.columns != 'readmitted'], training_set['readmitted'])
+    #
+    # # Best parameters and score
+    # print(f"Best parameters: {grid_search_gb.best_params_}")
+    # print(f"Best score: {grid_search_gb.best_score_}")
+    #
+    # # Use the best estimator for further evaluations
+    # best_gb_model = grid_search_gb.best_estimator_
+    #
+    # print("\nEvaluating the Gradient Boosting model with the best parameters...")
+    # model_test(best_gb_model, test_set)
+
