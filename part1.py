@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import seaborn as sns
 import matplotlib.pyplot as plt
+from distributed.protocol import torch
 from imblearn.over_sampling import SMOTE
 from sklearn import linear_model, preprocessing
 from sklearn.cluster import KMeans
@@ -9,12 +10,22 @@ from sklearn.decomposition import PCA
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.impute import SimpleImputer, KNNImputer
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, roc_auc_score
 from sklearn.model_selection import train_test_split, cross_val_score, GridSearchCV, KFold
 from sklearn import feature_selection, metrics
-from sklearn.preprocessing import StandardScaler, PolynomialFeatures
+from sklearn.preprocessing import StandardScaler, PolynomialFeatures, MinMaxScaler
 from sklearn.svm import SVC
+import torch
+import torch.nn as nn
+from sklearn.metrics import roc_auc_score
+from sklearn.model_selection import train_test_split
+from torch.optim import AdamW
+from torch.utils.data import DataLoader
+from sklearn.preprocessing import StandardScaler
+from torch.optim.lr_scheduler import StepLR
 from xgboost import XGBClassifier
+from tensorflow import keras
+from tensorflow.python.keras.callbacks import EarlyStopping
 
 
 def load_data(file_path):
@@ -206,7 +217,7 @@ def split_data(pd):
     # test = processed_data.sample(frac=0.2, random_state=42)
     # train = processed_data.drop(test.index)
 
-    train,test = train_test_split(pd, test_size=0.2, shuffle=True, random_state=93, stratify=pd['readmitted'])
+    train, test = train_test_split(pd, test_size=0.2, shuffle=True, random_state=93, stratify=pd['readmitted'])
     print(f"Train shape: {train.shape}")
     print(f"Readmitted in Train set:\n {train['readmitted'].value_counts()}")
     print(f"Percentage of Readmitted in Train set:\n {train['readmitted'].value_counts(normalize=True)}")
@@ -216,17 +227,18 @@ def split_data(pd):
     return test, train
 
 
-def model_train(mdl, df):
+def model_train(mdl, X, y):
     """Train the model using the training set."""
-    X = df.loc[:, df.columns != 'readmitted']
-    y = df['readmitted']
     mdl.fit(X, y)
 
     # Check if the model is a type of linear model
     if hasattr(mdl, 'intercept_'):
-        print(f'Intercept: {mdl.intercept_}')
+        print(f'Intercept: {mdl.intercept_}\n')
     if hasattr(mdl, 'coef_'):
         print(f'Coefficients: {mdl.coef_}')
+        # for feat, coef in zip(X.columns, mdl.coef_[0]):
+        #     print(f"{feat}: {coef}")
+        print(f"Model score against training data: {mdl.score(X, y)}")
 
     # For Random Forest or other tree-based models, you might want to print feature importances instead
     if hasattr(mdl, 'feature_importances_'):
@@ -235,18 +247,31 @@ def model_train(mdl, df):
     return mdl
 
 
-def model_test(mdl, df):
+def model_test(mdl, X, y):
     """Test the model using the testing set."""
-    X = df.loc[:, df.columns != 'readmitted']
-    y = df['readmitted']
-    y_pred = mdl.predict(X) if hasattr(mdl, "predict") else mdl.predict_proba(X)[:, 1] >= 0.5
+    y_pred = mdl.predict(X) if hasattr(mdl, "predict") else mdl.predict_proba(X)[:, 1] >= 0.42
     accuracy = metrics.accuracy_score(y, y_pred)
     confusion_matrix = metrics.confusion_matrix(y, y_pred)
-    cross_val_scores = cross_val_score(mdl, X, y, cv=5)
     print(f"Accuracy: {accuracy}")
     print(f"Confusion Matrix:\n {confusion_matrix}")
-    print(f"Cross Validation Score: {cross_val_scores}")
+    return mdl
 
+def plot_roc_curve(mdl, X, y):
+    prob = np.array(mdl.predict_proba(X)[:, 1])
+    y += 1
+    fpr, sensitivity, _ = metrics.roc_curve(y, prob, pos_label=2)
+    print("AUC = {}".format(metrics.auc(fpr, sensitivity)))
+    plt.scatter(fpr, fpr, c='b', marker='s')
+    plt.scatter(fpr, sensitivity, c='r', marker='o')
+    plt.show()
+
+
+def cross_validate_model(mdl, X, y):
+    """Cross-validate the model using the provided set."""
+    cv = KFold(n_splits=5, shuffle=True, random_state=42)
+    scores = cross_val_score(mdl, X, y, cv=cv, scoring='accuracy')
+    print(f"Cross-validated scores: {scores}")
+    print(f"Mean accuracy: {scores.mean()}")
 
 def recursive_feature_elimination(df):
     """Apply recursive feature elimination to the dataset."""
@@ -257,12 +282,12 @@ def recursive_feature_elimination(df):
     X0 = standardizer.fit_transform(X)
     X0 = pd.DataFrame(X0, index=X.index, columns=X.columns)
     # Apply RFE
-    mod = linear_model.LogisticRegression()
-    selector = feature_selection.RFE(mod, n_features_to_select=12, verbose=1, step=1)
+    mod = linear_model.LogisticRegression(max_iter=1000)
+    selector = feature_selection.RFE(mod, n_features_to_select=5, verbose=1, step=1)
     selector = selector.fit(X0, y)
     r_features = X.loc[:, selector.support_]
     print("R features are:\n{}".format(','.join(list(r_features))))
-    r_features = r_features.copy()  # Ensure r_features is a copy, not a view
+    r_features = r_features.copy()
     r_features['readmitted'] = df.loc[:, df.columns == 'readmitted']
     return r_features
 
@@ -365,6 +390,92 @@ def normalize_data_min_max(df, numerical_features):
     df[df_numerical.columns] = df_normalized
     return df
 
+def transform_data_for_model(df, numerical_features, target_column='readmitted'):
+    """Prepare data for model training and testing."""
+    X = df[numerical_features].values
+    y = df[target_column].values
+    return X, y
+
+
+class DiabetesDataset(torch.utils.data.Dataset):
+    """Diabetes dataset."""
+
+    def __init__(self, features, labels):
+        self.features = features
+        self.labels = labels
+
+    def __len__(self):
+        return len(self.labels)
+
+    def __getitem__(self, idx):
+        return self.features[idx], self.labels[idx]
+
+
+class BinaryClassificationModel(nn.Module):
+    def __init__(self, input_size):
+        super(BinaryClassificationModel, self).__init__()
+        self.network = nn.Sequential(
+            nn.Linear(input_size, 128),
+            nn.ReLU(),
+            nn.BatchNorm1d(128),
+            nn.Dropout(0.2),
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.BatchNorm1d(64),
+            nn.Dropout(0.5),
+            nn.Linear(64, 1),
+        )
+
+    def forward(self, x):
+        return self.network(x)
+
+
+def train_and_validate_model(model, train_loader, val_loader, criterion, optimizer, scheduler, num_epochs=10):
+    for epoch in range(num_epochs):
+        model.train()  # Set model to training mode
+        total_train_loss, total_train_auc = 0, 0
+
+        # Training phase
+        for inputs, labels in train_loader:
+            inputs, labels = inputs.float(), labels.float()
+            optimizer.zero_grad()
+            outputs = model(inputs).squeeze()
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
+            total_train_loss += loss.item()
+            auc = roc_auc_score(labels.cpu().detach().numpy(), outputs.cpu().detach().numpy())
+            total_train_auc += auc
+
+        avg_train_loss = total_train_loss / len(train_loader)
+        avg_train_auc = total_train_auc / len(train_loader)
+
+        # Validation phase
+        model.eval()  # Set model to evaluation mode
+        total_val_loss, total_val_auc = 0, 0
+        with torch.no_grad():
+            for inputs, labels in val_loader:
+                inputs, labels = inputs.float(), labels.float()
+                outputs = model(inputs).squeeze()
+                loss = criterion(outputs, labels)
+                total_val_loss += loss.item()
+                auc = roc_auc_score(labels.cpu().numpy(), outputs.cpu().numpy())
+                total_val_auc += auc
+
+        avg_val_loss = total_val_loss / len(val_loader)
+        avg_val_auc = total_val_auc / len(val_loader)
+
+        print(
+            f'Epoch {epoch + 1}/{num_epochs}, '
+            f'Train Loss: {avg_train_loss:.4f}, '
+            f'Train AUC: {avg_train_auc:.4f}, '
+            f'Val Loss: {avg_val_loss:.4f}, '
+            f'Val AUC: {avg_val_auc:.4f}')
+
+        scheduler.step()
+
+
+
 
 if __name__ == "__main__":
     file_path = 'diabetic_data.csv'
@@ -392,24 +503,39 @@ if __name__ == "__main__":
     subset = ['num_medications', 'number_outpatient', 'number_emergency', 'time_in_hospital', 'number_inpatient',
               'age', 'num_lab_procedures', 'number_diagnoses', 'num_procedures', 'readmitted']
     rfe_subset_data = recursive_feature_elimination(processed_data[subset])
-    test_set, training_set = split_data(rfe_subset_data)
+    rfe_test_set, rfe_training_set = split_data(rfe_subset_data)
+
+    df = pd.get_dummies(processed_data)
+    features_to_drop = df.nunique()
+    features_to_drop = features_to_drop.loc[features_to_drop.values == 1].index
+    df = df.drop(features_to_drop, axis=1)
+
+    test_set, training_set = split_data(pd.get_dummies(processed_data))
 
     # Handling imbalance with SMOTE
-    sm = SMOTE(random_state=42)
+    sm = SMOTE(random_state=96)
     X_train, y_train = sm.fit_resample(training_set.drop('readmitted', axis=1), training_set['readmitted'])
+    X_test, y_test = test_set.drop('readmitted', axis=1), test_set['readmitted']
+    X_rfe_train, y_rfe_train = sm.fit_resample(rfe_training_set.drop('readmitted', axis=1),
+                                               rfe_training_set['readmitted'])
+    X_rfe_test, y_rfe_test = rfe_test_set.drop('readmitted', axis=1), rfe_test_set['readmitted']
+    X_rfe_set, y_rfe_set = rfe_subset_data.drop('readmitted', axis=1), rfe_subset_data['readmitted']
 
     # Train and test the Logistic Regression Model
+    print("-" * 20)
     print("Training and testing Logistic Regression Model...")
-    lr_model = LogisticRegression(max_iter=400)
-    lr_model.fit(X_train, y_train)
+    lr_model = LogisticRegression()
+    lr_model = model_train(lr_model, X_rfe_train, y_rfe_train)
     print("Model training completed.")
 
     # Test Logistic Regression Model
-    X_test = test_set.drop('readmitted', axis=1)
-    y_test = test_set['readmitted']
-    y_pred_lr = lr_model.predict(X_test)
-    print("Accuracy score for training data is: {:4.3f}".format(lr_model.score(X_train, y_train)))
-    print("Accuracy score for test data: {:4.3f}".format(lr_model.score(X_train, y_train)))
+    lr_model=model_test(lr_model, X_rfe_test, y_rfe_test)
+    cross_validate_model(lr_model, X_rfe_set, y_rfe_set)
+    plot_roc_curve(lr_model, X_rfe_test, y_rfe_test)
+
+
+
+    print("-" * 20)
 
     # Train and test the Random Forest Model
     print("Training and testing Random Forest Model...")
@@ -422,114 +548,36 @@ if __name__ == "__main__":
 
     # Test Random Forest Model
     y_pred_rf = crf.predict(X_test)
-    # print("Accuracy of Random Forest Model:", accuracy_score(y_test, y_pred_rf))
+    print("Accuracy of Random Forest Model:", accuracy_score(y_test, y_pred_rf))
 
-    # # Now, we perform GridSearchCV for the Random Forest model to find the best parameters
-    # print("\nStarting GridSearchCV for Random Forest...")
-    # param_grid = {
-    #     'n_estimators': [25, 40, 50, 100],
-    #     'max_depth': [None, 1, 2, 3, 5],
-    #     'min_samples_split': [2, 3, 5],
-    #     'min_samples_leaf': [1, 2, 4, 6],
-    #     'max_features': ['log2', 'sqrt'],
-    #     'bootstrap': [True, False]
-    # }
-    # grid_search = GridSearchCV(RandomForestClassifier(random_state=42), param_grid, cv=5, verbose=1, n_jobs=-1,
-    #                            scoring='accuracy')
-    # grid_search.fit(training_set.loc[:, training_set.columns != 'readmitted'], training_set['readmitted'])
-    # print(f"Best parameters: {grid_search.best_params_}")
-    # print(f"Best score: {grid_search.best_score_}")
-    #
-    # # After finding the best parameters, we directly use the best estimator for further evaluation
-    # rf_model = grid_search.best_estimator_
-    #
-    # print("\nEvaluating the Random Forest model with the best parameters...")
-    # model_test(rf_model, test_set)
+    # BCE model
+    X, y = transform_data_for_model(processed_data, numerical_features)
+    X_train, X_temp, y_train, y_temp = train_test_split(X, y, test_size=0.3, random_state=42)
+    X_val, X_test, y_val, y_test = train_test_split(X_temp, y_temp, test_size=0.5, random_state=42)
 
-    # # Define the parameter grid for XGBoost
-    # param_grid_xgb = {
-    #     'n_estimators': [10, 25, 40, 50, 100],
-    #     'max_depth': [3, 6, 8],
-    #     'learning_rate': [0.001, 0.005, 0.01],
-    #     'subsample': [0.4, 0.6, 0.8],
-    #     'colsample_bytree': [0.4, 0.6, 0.8],
-    #     'gamma': [0.01, 0.05, 0.1, 0.2],
-    # }
-    #
-    # # Initialize the XGBoost classifier
-    # xgb_model = XGBClassifier(random_state=42, eval_metric='logloss')
-    #
-    # # GridSearchCV to find the best parameters for XGBoost
-    # grid_search_xgb = GridSearchCV(estimator=xgb_model, param_grid=param_grid_xgb, cv=5, verbose=1, n_jobs=-1, scoring='accuracy')
-    #
-    # # Fit GridSearchCV
-    # print("\nStarting GridSearchCV for XGBoost...")
-    # grid_search_xgb.fit(training_set.loc[:, training_set.columns != 'readmitted'], training_set['readmitted'])
-    #
-    # # Best parameters and score
-    # print(f"Best parameters: {grid_search_xgb.best_params_}")
-    # print(f"Best score: {grid_search_xgb.best_score_}")
-    #
-    # # Use the best estimator for further evaluations
-    # best_xgb_model = grid_search_xgb.best_estimator_
-    #
-    # # Assuming model_test function is updated to accept X and y directly
-    # print("\nEvaluating the XGBoost model with the best parameters...")
-    # model_test(best_xgb_model, test_set)
-    #
-    # # Define the parameter grid for SVM
-    # param_grid_svm = {
-    #     'C': [0.1, 1, 10],  # Regularization parameter
-    #     'gamma': ['scale', 'auto'],  # Kernel coefficient for 'rbf', 'poly', and 'sigmoid'
-    #     'kernel': ['rbf', 'linear']  # Specifies the kernel type to be used in the algorithm
-    # }
-    #
-    # # Initialize the SVM classifier
-    # svm_model = SVC(random_state=42)
-    #
-    # # GridSearchCV to find the best parameters for SVM
-    # grid_search_svm = GridSearchCV(estimator=svm_model, param_grid=param_grid_svm, cv=5, verbose=1, n_jobs=-1,
-    #                                scoring='accuracy')
-    #
-    # print("\nStarting GridSearchCV for SVM...")
-    # grid_search_svm.fit(training_set.loc[:, training_set.columns != 'readmitted'], training_set['readmitted'])
-    #
-    # # Best parameters and score
-    # print(f"Best parameters: {grid_search_svm.best_params_}")
-    # print(f"Best score: {grid_search_svm.best_score_}")
-    #
-    # # Use the best estimator for further evaluations
-    # best_svm_model = grid_search_svm.best_estimator_
-    #
-    # print("\nEvaluating the SVM model with the best parameters...")
-    # model_test(best_svm_model, test_set)
-    #
-    # # Define the parameter grid for Gradient Boosting
-    # param_grid_gb = {
-    #     'n_estimators': [25, 50, 75, 100 , 200],
-    #     'learning_rate': [0.01, 0.1, 0.2],
-    #     'max_depth': [3, 4, 5],
-    #     'min_samples_split': [2, 3, 4],
-    #     'min_samples_leaf': [1, 2, 3]
-    # }
-    #
-    # # Initialize the Gradient Boosting classifier
-    # gb_model = GradientBoostingClassifier(random_state=42)
-    #
-    # # GridSearchCV to find the best parameters for Gradient Boosting
-    # grid_search_gb = GridSearchCV(estimator=gb_model, param_grid=param_grid_gb, cv=5, verbose=1, n_jobs=-1,
-    #                               scoring='accuracy')
-    #
-    # print("\nStarting GridSearchCV for Gradient Boosting...")
-    # grid_search_gb.fit(training_set.loc[:, training_set.columns != 'readmitted'], training_set['readmitted'])
-    #
-    # # Best parameters and score
-    # print(f"Best parameters: {grid_search_gb.best_params_}")
-    # print(f"Best score: {grid_search_gb.best_score_}")
-    #
-    # # Use the best estimator for further evaluations
-    # best_gb_model = grid_search_gb.best_estimator_
-    #
-    # print("\nEvaluating the Gradient Boosting model with the best parameters...")
-    # model_test(best_gb_model, test_set)
+    # Normalise features
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_val_scaled = scaler.transform(X_val)
+    X_test_scaled = scaler.transform(X_test)
+
+    # Create DataLoaders for both training and validation sets
+    train_dataset = DiabetesDataset(torch.tensor(X_train_scaled, dtype=torch.float32),
+                                    torch.tensor(y_train, dtype=torch.float32))
+    val_dataset = DiabetesDataset(torch.tensor(X_val_scaled, dtype=torch.float32),
+                                  torch.tensor(y_val, dtype=torch.float32))
+
+    train_loader = DataLoader(dataset=train_dataset, batch_size=64, shuffle=True)
+    val_loader = DataLoader(dataset=val_dataset, batch_size=64,
+                            shuffle=False)
+
+    # Define model, criterion, and optimiser with a smaller learning rate
+    model = BinaryClassificationModel(input_size=X_train_scaled.shape[1])
+    criterion = nn.BCEWithLogitsLoss()
+    optimizer = AdamW(model.parameters(), lr=0.001, weight_decay=0.01)
+    scheduler = StepLR(optimizer, step_size=50, gamma=0.1)
+
+    # Train and validate the model
+    train_and_validate_model(model, train_loader, val_loader, criterion, optimizer, scheduler, num_epochs=80)
+
 
