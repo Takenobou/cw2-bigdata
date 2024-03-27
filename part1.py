@@ -12,10 +12,11 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score
 from sklearn.model_selection import train_test_split, cross_val_score, GridSearchCV, KFold
 from sklearn import feature_selection, metrics
-from sklearn.preprocessing import StandardScaler, PolynomialFeatures
+from sklearn.preprocessing import StandardScaler, PolynomialFeatures, MinMaxScaler
 from sklearn.svm import SVC
 from xgboost import XGBClassifier
-
+from tensorflow import keras
+from tensorflow.python.keras.callbacks import EarlyStopping
 
 def load_data(file_path):
     """Load the dataset from a CSV file."""
@@ -442,111 +443,83 @@ if __name__ == "__main__":
     y_pred_rf = crf.predict(X_test)
     # print("Accuracy of Random Forest Model:", accuracy_score(y_test, y_pred_rf))
 
-    # # Now, we perform GridSearchCV for the Random Forest model to find the best parameters
-    # print("\nStarting GridSearchCV for Random Forest...")
-    # param_grid = {
-    #     'n_estimators': [25, 40, 50, 100],
-    #     'max_depth': [None, 1, 2, 3, 5],
-    #     'min_samples_split': [2, 3, 5],
-    #     'min_samples_leaf': [1, 2, 4, 6],
-    #     'max_features': ['log2', 'sqrt'],
-    #     'bootstrap': [True, False]
-    # }
-    # grid_search = GridSearchCV(RandomForestClassifier(random_state=42), param_grid, cv=5, verbose=1, n_jobs=-1,
-    #                            scoring='accuracy')
-    # grid_search.fit(training_set.loc[:, training_set.columns != 'readmitted'], training_set['readmitted'])
-    # print(f"Best parameters: {grid_search.best_params_}")
-    # print(f"Best score: {grid_search.best_score_}")
-    #
-    # # After finding the best parameters, we directly use the best estimator for further evaluation
-    # rf_model = grid_search.best_estimator_
-    #
-    # print("\nEvaluating the Random Forest model with the best parameters...")
-    # model_test(rf_model, test_set)
+    ######################################################################
+    test_set, training_set = split_data(df)
 
-    # # Define the parameter grid for XGBoost
-    # param_grid_xgb = {
-    #     'n_estimators': [10, 25, 40, 50, 100],
-    #     'max_depth': [3, 6, 8],
-    #     'learning_rate': [0.001, 0.005, 0.01],
-    #     'subsample': [0.4, 0.6, 0.8],
-    #     'colsample_bytree': [0.4, 0.6, 0.8],
-    #     'gamma': [0.01, 0.05, 0.1, 0.2],
-    # }
-    #
-    # # Initialize the XGBoost classifier
-    # xgb_model = XGBClassifier(random_state=42, eval_metric='logloss')
-    #
-    # # GridSearchCV to find the best parameters for XGBoost
-    # grid_search_xgb = GridSearchCV(estimator=xgb_model, param_grid=param_grid_xgb, cv=5, verbose=1, n_jobs=-1, scoring='accuracy')
-    #
-    # # Fit GridSearchCV
-    # print("\nStarting GridSearchCV for XGBoost...")
-    # grid_search_xgb.fit(training_set.loc[:, training_set.columns != 'readmitted'], training_set['readmitted'])
-    #
-    # # Best parameters and score
-    # print(f"Best parameters: {grid_search_xgb.best_params_}")
-    # print(f"Best score: {grid_search_xgb.best_score_}")
-    #
-    # # Use the best estimator for further evaluations
-    # best_xgb_model = grid_search_xgb.best_estimator_
-    #
-    # # Assuming model_test function is updated to accept X and y directly
-    # print("\nEvaluating the XGBoost model with the best parameters...")
-    # model_test(best_xgb_model, test_set)
-    #
-    # # Define the parameter grid for SVM
-    # param_grid_svm = {
-    #     'C': [0.1, 1, 10],  # Regularization parameter
-    #     'gamma': ['scale', 'auto'],  # Kernel coefficient for 'rbf', 'poly', and 'sigmoid'
-    #     'kernel': ['rbf', 'linear']  # Specifies the kernel type to be used in the algorithm
-    # }
-    #
-    # # Initialize the SVM classifier
-    # svm_model = SVC(random_state=42)
-    #
-    # # GridSearchCV to find the best parameters for SVM
-    # grid_search_svm = GridSearchCV(estimator=svm_model, param_grid=param_grid_svm, cv=5, verbose=1, n_jobs=-1,
-    #                                scoring='accuracy')
-    #
-    # print("\nStarting GridSearchCV for SVM...")
-    # grid_search_svm.fit(training_set.loc[:, training_set.columns != 'readmitted'], training_set['readmitted'])
-    #
-    # # Best parameters and score
-    # print(f"Best parameters: {grid_search_svm.best_params_}")
-    # print(f"Best score: {grid_search_svm.best_score_}")
-    #
-    # # Use the best estimator for further evaluations
-    # best_svm_model = grid_search_svm.best_estimator_
-    #
-    # print("\nEvaluating the SVM model with the best parameters...")
-    # model_test(best_svm_model, test_set)
-    #
-    # # Define the parameter grid for Gradient Boosting
-    # param_grid_gb = {
-    #     'n_estimators': [25, 50, 75, 100 , 200],
-    #     'learning_rate': [0.01, 0.1, 0.2],
-    #     'max_depth': [3, 4, 5],
-    #     'min_samples_split': [2, 3, 4],
-    #     'min_samples_leaf': [1, 2, 3]
-    # }
-    #
-    # # Initialize the Gradient Boosting classifier
-    # gb_model = GradientBoostingClassifier(random_state=42)
-    #
-    # # GridSearchCV to find the best parameters for Gradient Boosting
-    # grid_search_gb = GridSearchCV(estimator=gb_model, param_grid=param_grid_gb, cv=5, verbose=1, n_jobs=-1,
-    #                               scoring='accuracy')
-    #
-    # print("\nStarting GridSearchCV for Gradient Boosting...")
-    # grid_search_gb.fit(training_set.loc[:, training_set.columns != 'readmitted'], training_set['readmitted'])
-    #
-    # # Best parameters and score
-    # print(f"Best parameters: {grid_search_gb.best_params_}")
-    # print(f"Best score: {grid_search_gb.best_score_}")
-    #
-    # # Use the best estimator for further evaluations
-    # best_gb_model = grid_search_gb.best_estimator_
-    #
-    # print("\nEvaluating the Gradient Boosting model with the best parameters...")
-    # model_test(best_gb_model, test_set)
+    test_X = test_set.iloc[:, :-1]
+    test_y = test_set['readmitted']
+
+    X = training_set.iloc[:, :-1]
+    y = training_set['readmitted']
+    X_resampled, y_resampled = SMOTE().fit_resample(X, y)
+
+    X_train, X_val, y_train, y_val = train_test_split(X_resampled, y_resampled,
+                                                      train_size=0.5,
+                                                      test_size=0.2,
+                                                      random_state=42,
+                                                      shuffle=True)
+
+    scaler = MinMaxScaler()
+    X_train = scaler.fit_transform(X_train)
+    X_val = scaler.transform(X_val)
+    test_X = scaler.transform(test_X)
+
+
+
+    model = keras.Sequential(
+        [
+            keras.layers.Dense(units=4, activation="relu", input_shape=(X_train.shape[-1],)),
+            # randomly delete 30% of the input units below
+            keras.layers.Dropout(0.4),
+            keras.layers.Dense(units=4, activation="relu"),
+            # the output layer, with a single neuron
+            keras.layers.Dense(units=1, activation="sigmoid"),
+        ]
+    )
+    initial_weights = model.get_weights()
+    model.summary()
+
+    learning_rate = 0.001
+    model.compile(optimizer=keras.optimizers.Adam(learning_rate=learning_rate),
+                  loss="binary_crossentropy",
+                  metrics=keras.metrics.AUC()
+                  )
+
+    early_stopping = EarlyStopping(
+        min_delta=0.0002,
+        patience=20,
+        restore_best_weights=True
+    )
+
+    history = model.fit(X_train, y_train,
+                        epochs=50,
+                        batch_size=2000,
+                        validation_data=(X_val, y_val),
+                        verbose=0,
+                        callbacks=[early_stopping])
+
+    logs = pd.DataFrame(history.history)
+
+    plt.figure(figsize=(14, 4))
+    plt.subplot(1, 2, 1)
+    plt.plot(logs.loc[5:, "loss"], lw=2, label='training loss')
+    plt.plot(logs.loc[5:, "val_loss"], lw=2, label='validation loss')
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.legend()
+    plt.subplot(1, 2, 2)
+    plt.plot(logs.loc[5:, "auc"], lw=2, label='training ROC AUC score')
+    plt.plot(logs.loc[5:, "val_auc"], lw=2, label='validation ROC AUC score')
+    plt.xlabel("Epoch")
+    plt.ylabel("ROC AUC")
+    plt.legend(loc='lower right')
+    plt.show()
+
+    results = model.evaluate(test_X, test_y, batch_size=1000)
+    print("test loss, test acc:", results)
+
+    # y_predictions = model.predict(test_X)
+    # accuracy = metrics.accuracy_score(y, y_predictions)
+    # confusion_matrix = metrics.confusion_matrix(y, y_predictions)
+    # print(f"Accuracy: {accuracy}")
+    # print(f"Confusion Matrix:\n {confusion_matrix}")
