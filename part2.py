@@ -11,7 +11,6 @@ from torch.utils.data import DataLoader
 from sklearn.preprocessing import StandardScaler
 from torch.optim.lr_scheduler import StepLR
 
-
 def load_data(file_path):
     """Load the dataset from a CSV file."""
     return pd.read_csv(file_path)
@@ -216,14 +215,15 @@ class BinaryClassificationModel(nn.Module):
     def __init__(self, input_size):
         super(BinaryClassificationModel, self).__init__()
         self.network = nn.Sequential(
-            nn.Linear(input_size, 128),
+            nn.Linear(input_size, 256),
+            nn.ReLU(),
+            nn.BatchNorm1d(256),
+            nn.Linear(256, 128),
             nn.ReLU(),
             nn.BatchNorm1d(128),
-            nn.Dropout(0.5),
             nn.Linear(128, 64),
             nn.ReLU(),
             nn.BatchNorm1d(64),
-            nn.Dropout(0.5),
             nn.Linear(64, 1),
         )
 
@@ -309,4 +309,4 @@ if __name__ == "__main__":
     scheduler = StepLR(optimizer, step_size=50, gamma=0.1)
 
     # Train and validate the model
-    train_and_validate_model(model, train_loader, val_loader, criterion, optimizer, scheduler, num_epochs=80)
+    train_and_validate_model(model, train_loader, val_loader, criterion, optimizer, scheduler, num_epochs=50)
