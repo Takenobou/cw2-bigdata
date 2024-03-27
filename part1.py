@@ -462,9 +462,9 @@ if __name__ == "__main__":
     X_resampled, y_resampled = SMOTE().fit_resample(X, y)
 
     X_train, X_val, y_train, y_val = train_test_split(X_resampled, y_resampled,
-                                                      train_size=0.5,
+                                                      train_size=0.7,
                                                       test_size=0.2,
-                                                      random_state=42,
+                                                      random_state=30,
                                                       shuffle=True)
 
     scaler = MinMaxScaler()
@@ -474,10 +474,12 @@ if __name__ == "__main__":
 
     model = keras.Sequential(
         [
-            keras.layers.Dense(units=4, activation="relu", input_shape=(X_train.shape[-1],)),
+            keras.layers.Dense(units=8, activation="relu", input_shape=(X_train.shape[-1],)),
             # randomly delete 30% of the input units below
-            keras.layers.Dropout(0.4),
-            keras.layers.Dense(units=4, activation="relu"),
+            keras.layers.Dropout(0.7),
+            keras.layers.Dense(units=8, activation="relu"),
+            keras.layers.Dense(units=8, activation="relu"),
+            keras.layers.Dense(units=8, activation="relu"),
             # the output layer, with a single neuron
             keras.layers.Dense(units=1, activation="sigmoid"),
         ]
@@ -492,14 +494,14 @@ if __name__ == "__main__":
                   )
 
     early_stopping = EarlyStopping(
-        min_delta=0.0002,
+        min_delta=0.002,
         patience=20,
         restore_best_weights=True
     )
 
     history = model.fit(X_train, y_train,
-                        epochs=50,
-                        batch_size=2000,
+                        epochs=200,
+                        batch_size=1024,
                         validation_data=(X_val, y_val),
                         verbose=0,
                         callbacks=[early_stopping])
