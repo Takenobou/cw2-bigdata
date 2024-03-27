@@ -454,10 +454,10 @@ if __name__ == "__main__":
     ######################################################################
     test_set, training_set = split_data(df)
 
-    test_X = test_set.iloc[:, :-1]
+    test_X = test_set.loc[:, test_set.columns != 'readmitted']
     test_y = test_set['readmitted']
 
-    X = training_set.iloc[:, :-1]
+    X = training_set.loc[:, training_set.columns != 'readmitted']
     y = training_set['readmitted']
     X_resampled, y_resampled = SMOTE().fit_resample(X, y)
 
@@ -471,8 +471,6 @@ if __name__ == "__main__":
     X_train = scaler.fit_transform(X_train)
     X_val = scaler.transform(X_val)
     test_X = scaler.transform(test_X)
-
-
 
     model = keras.Sequential(
         [
