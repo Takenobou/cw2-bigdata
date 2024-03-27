@@ -206,7 +206,7 @@ def split_data(pd):
     # test = processed_data.sample(frac=0.2, random_state=42)
     # train = processed_data.drop(test.index)
 
-    train,test = train_test_split(pd, test_size=0.2, shuffle=True, random_state=93, stratify=pd['readmitted'])
+    train, test = train_test_split(pd, test_size=0.2, shuffle=True, random_state=93, stratify=pd['readmitted'])
     print(f"Train shape: {train.shape}")
     print(f"Readmitted in Train set:\n {train['readmitted'].value_counts()}")
     print(f"Percentage of Readmitted in Train set:\n {train['readmitted'].value_counts(normalize=True)}")
@@ -216,17 +216,18 @@ def split_data(pd):
     return test, train
 
 
-def model_train(mdl, df):
+def model_train(mdl, X, y):
     """Train the model using the training set."""
-    X = df.loc[:, df.columns != 'readmitted']
-    y = df['readmitted']
     mdl.fit(X, y)
 
     # Check if the model is a type of linear model
     if hasattr(mdl, 'intercept_'):
-        print(f'Intercept: {mdl.intercept_}')
+        print(f'Intercept: {mdl.intercept_}\n')
     if hasattr(mdl, 'coef_'):
         print(f'Coefficients: {mdl.coef_}')
+        for feat, coef in zip(X.columns, mdl.coef_[0]):
+            print(f"{feat}: {coef}")
+        print(f"Model score against training data: {mdl.score(X, y)}")
 
     # For Random Forest or other tree-based models, you might want to print feature importances instead
     if hasattr(mdl, 'feature_importances_'):
@@ -235,10 +236,8 @@ def model_train(mdl, df):
     return mdl
 
 
-def model_test(mdl, df):
+def model_test(mdl, X,y):
     """Test the model using the testing set."""
-    X = df.loc[:, df.columns != 'readmitted']
-    y = df['readmitted']
     y_pred = mdl.predict(X) if hasattr(mdl, "predict") else mdl.predict_proba(X)[:, 1] >= 0.5
     accuracy = metrics.accuracy_score(y, y_pred)
     confusion_matrix = metrics.confusion_matrix(y, y_pred)
@@ -246,6 +245,23 @@ def model_test(mdl, df):
     print(f"Accuracy: {accuracy}")
     print(f"Confusion Matrix:\n {confusion_matrix}")
     print(f"Cross Validation Score: {cross_val_scores}")
+    for t in [0.2, 0.3, 0.5, 0.1, 0.01, 0.08]:
+        crosstab = classify_for_threshold(mdl, X, y, t)
+        print("Threshold {}:\n{}\n".format(t, crosstab))
+    prob = np.array(mdl.predict_proba(X)[:, 1])
+    y += 1
+    fpr, sensitivity, _ = metrics.roc_curve(y, prob, pos_label=2)
+    print("AUC = {}".format(metrics.auc(fpr, sensitivity)))
+    plt.scatter(fpr, fpr, c='b', marker='s')
+    plt.scatter(fpr, sensitivity, c='r', marker='o')
+    plt.show()
+
+
+def classify_for_threshold(mdl, X, Y, t):
+    prob_df = pd.DataFrame(mdl.predict_proba(X)[:, 1])
+    prob_df['predict'] = np.where(prob_df[0] >= t, 1, 0)
+    prob_df['actual'] = Y
+    return pd.crosstab(prob_df['actual'], prob_df['predict'])
 
 
 def recursive_feature_elimination(df):
@@ -257,8 +273,8 @@ def recursive_feature_elimination(df):
     X0 = standardizer.fit_transform(X)
     X0 = pd.DataFrame(X0, index=X.index, columns=X.columns)
     # Apply RFE
-    mod = linear_model.LogisticRegression()
-    selector = feature_selection.RFE(mod, n_features_to_select=12, verbose=1, step=1)
+    mod = linear_model.LogisticRegression(max_iter=1000)
+    selector = feature_selection.RFE(mod, n_features_to_select=6, verbose=1, step=1)
     selector = selector.fit(X0, y)
     r_features = X.loc[:, selector.support_]
     print("R features are:\n{}".format(','.join(list(r_features))))
@@ -392,24 +408,26 @@ if __name__ == "__main__":
     subset = ['num_medications', 'number_outpatient', 'number_emergency', 'time_in_hospital', 'number_inpatient',
               'age', 'num_lab_procedures', 'number_diagnoses', 'num_procedures', 'readmitted']
     rfe_subset_data = recursive_feature_elimination(processed_data[subset])
-    test_set, training_set = split_data(rfe_subset_data)
+    rfe_test_set, rfe_training_set = split_data(rfe_subset_data)
+    test_set, training_set = split_data(processed_data[subset])
 
     # Handling imbalance with SMOTE
     sm = SMOTE(random_state=42)
     X_train, y_train = sm.fit_resample(training_set.drop('readmitted', axis=1), training_set['readmitted'])
+    X_test, y_test = test_set.drop('readmitted', axis=1), test_set['readmitted']
+    X_rfe_train, y_rfe_train = sm.fit_resample(rfe_training_set.drop('readmitted', axis=1), rfe_training_set['readmitted'])
+    X_rfe_test, y_rfe_test = rfe_test_set.drop('readmitted', axis=1), rfe_test_set['readmitted']
 
     # Train and test the Logistic Regression Model
+    print("-" * 20)
     print("Training and testing Logistic Regression Model...")
-    lr_model = LogisticRegression(max_iter=400)
-    lr_model.fit(X_train, y_train)
+    lr_model = LogisticRegression()
+    lr_model = model_train(lr_model, X_rfe_train, y_rfe_train)
     print("Model training completed.")
 
     # Test Logistic Regression Model
-    X_test = test_set.drop('readmitted', axis=1)
-    y_test = test_set['readmitted']
-    y_pred_lr = lr_model.predict(X_test)
-    print("Accuracy score for training data is: {:4.3f}".format(lr_model.score(X_train, y_train)))
-    print("Accuracy score for test data: {:4.3f}".format(lr_model.score(X_train, y_train)))
+    model_test(lr_model, X_rfe_test, y_rfe_test)
+    print("-" * 20)
 
     # Train and test the Random Forest Model
     print("Training and testing Random Forest Model...")
@@ -532,4 +550,3 @@ if __name__ == "__main__":
     #
     # print("\nEvaluating the Gradient Boosting model with the best parameters...")
     # model_test(best_gb_model, test_set)
-
