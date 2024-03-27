@@ -227,8 +227,8 @@ def model_train(mdl, X, y):
         print(f'Intercept: {mdl.intercept_}\n')
     if hasattr(mdl, 'coef_'):
         print(f'Coefficients: {mdl.coef_}')
-        for feat, coef in zip(X.columns, mdl.coef_[0]):
-            print(f"{feat}: {coef}")
+        # for feat, coef in zip(X.columns, mdl.coef_[0]):
+        #     print(f"{feat}: {coef}")
         print(f"Model score against training data: {mdl.score(X, y)}")
 
     # For Random Forest or other tree-based models, you might want to print feature importances instead
@@ -240,16 +240,14 @@ def model_train(mdl, X, y):
 
 def model_test(mdl, X, y):
     """Test the model using the testing set."""
-    y_pred = mdl.predict(X) if hasattr(mdl, "predict") else mdl.predict_proba(X)[:, 1] >= 0.5
+    y_pred = mdl.predict(X) if hasattr(mdl, "predict") else mdl.predict_proba(X)[:, 1] >= 0.42
     accuracy = metrics.accuracy_score(y, y_pred)
     confusion_matrix = metrics.confusion_matrix(y, y_pred)
-    cross_val_scores = cross_val_score(mdl, X, y, cv=5)
     print(f"Accuracy: {accuracy}")
     print(f"Confusion Matrix:\n {confusion_matrix}")
-    print(f"Cross Validation Score: {cross_val_scores}")
-    for t in [0.2, 0.3, 0.5, 0.1, 0.01, 0.08]:
-        crosstab = classify_for_threshold(mdl, X, y, t)
-        print("Threshold {}:\n{}\n".format(t, crosstab))
+    return mdl
+
+def plot_roc_curve(mdl, X, y):
     prob = np.array(mdl.predict_proba(X)[:, 1])
     y += 1
     fpr, sensitivity, _ = metrics.roc_curve(y, prob, pos_label=2)
@@ -259,12 +257,12 @@ def model_test(mdl, X, y):
     plt.show()
 
 
-def classify_for_threshold(mdl, X, Y, t):
-    prob_df = pd.DataFrame(mdl.predict_proba(X)[:, 1])
-    prob_df['predict'] = np.where(prob_df[0] >= t, 1, 0)
-    prob_df['actual'] = Y
-    return pd.crosstab(prob_df['actual'], prob_df['predict'])
-
+def cross_validate_model(mdl, X, y):
+    """Cross-validate the model using the provided set."""
+    cv = KFold(n_splits=5, shuffle=True, random_state=42)
+    scores = cross_val_score(mdl, X, y, cv=cv, scoring='accuracy')
+    print(f"Cross-validated scores: {scores}")
+    print(f"Mean accuracy: {scores.mean()}")
 
 def recursive_feature_elimination(df):
     """Apply recursive feature elimination to the dataset."""
@@ -276,11 +274,11 @@ def recursive_feature_elimination(df):
     X0 = pd.DataFrame(X0, index=X.index, columns=X.columns)
     # Apply RFE
     mod = linear_model.LogisticRegression(max_iter=1000)
-    selector = feature_selection.RFE(mod, n_features_to_select=6, verbose=1, step=1)
+    selector = feature_selection.RFE(mod, n_features_to_select=5, verbose=1, step=1)
     selector = selector.fit(X0, y)
     r_features = X.loc[:, selector.support_]
     print("R features are:\n{}".format(','.join(list(r_features))))
-    r_features = r_features.copy()  # Ensure r_features is a copy, not a view
+    r_features = r_features.copy()
     r_features['readmitted'] = df.loc[:, df.columns == 'readmitted']
     return r_features
 
@@ -417,15 +415,16 @@ if __name__ == "__main__":
     features_to_drop = features_to_drop.loc[features_to_drop.values == 1].index
     df = df.drop(features_to_drop, axis=1)
 
-    test_set, training_set = split_data(processed_data)
+    test_set, training_set = split_data(pd.get_dummies(processed_data))
 
     # Handling imbalance with SMOTE
-    sm = SMOTE(random_state=42)
-    # X_train, y_train = sm.fit_resample(training_set.drop('readmitted', axis=1), training_set['readmitted'])
-    # X_test, y_test = test_set.drop('readmitted', axis=1), test_set['readmitted']
+    sm = SMOTE(random_state=96)
+    X_train, y_train = sm.fit_resample(training_set.drop('readmitted', axis=1), training_set['readmitted'])
+    X_test, y_test = test_set.drop('readmitted', axis=1), test_set['readmitted']
     X_rfe_train, y_rfe_train = sm.fit_resample(rfe_training_set.drop('readmitted', axis=1),
                                                rfe_training_set['readmitted'])
     X_rfe_test, y_rfe_test = rfe_test_set.drop('readmitted', axis=1), rfe_test_set['readmitted']
+    X_rfe_set, y_rfe_set = rfe_subset_data.drop('readmitted', axis=1), rfe_subset_data['readmitted']
 
     # Train and test the Logistic Regression Model
     print("-" * 20)
@@ -435,10 +434,15 @@ if __name__ == "__main__":
     print("Model training completed.")
 
     # Test Logistic Regression Model
-    model_test(lr_model, X_rfe_test, y_rfe_test)
+    lr_model=model_test(lr_model, X_rfe_test, y_rfe_test)
+    cross_validate_model(lr_model, X_rfe_set, y_rfe_set)
+    plot_roc_curve(lr_model, X_rfe_test, y_rfe_test)
+
+
+
     print("-" * 20)
 
-    # Train and test the Random Forest Model
+    # # Train and test the Random Forest Model
     # print("Training and testing Random Forest Model...")
     # crf = RandomForestClassifier(n_estimators=400, min_samples_leaf=5, max_depth=30, random_state=42, oob_score=True)
     # crf.fit(X_train, y_train)
@@ -446,8 +450,8 @@ if __name__ == "__main__":
     # print("Accuracy score for training data is: {:4.3f}".format(crf.score(X_train, y_train)))
     # print("Accuracy score for test data: {:4.3f}".format(crf.score(X_train, y_train)))
     # print("The Oob score is: {:4.3f}".format(crf.oob_score_))
-
-    # Test Random Forest Model
+    #
+    # # Test Random Forest Model
     # y_pred_rf = crf.predict(X_test)
     # print("Accuracy of Random Forest Model:", accuracy_score(y_test, y_pred_rf))
 
@@ -474,12 +478,14 @@ if __name__ == "__main__":
 
     model = keras.Sequential(
         [
-            keras.layers.Dense(units=8, activation="relu", input_shape=(X_train.shape[-1],)),
+            keras.layers.Dense(units=10, activation="relu", input_shape=(X_train.shape[-1],)),
             # randomly delete 30% of the input units below
             keras.layers.Dropout(0.7),
-            keras.layers.Dense(units=8, activation="relu"),
-            keras.layers.Dense(units=8, activation="relu"),
-            keras.layers.Dense(units=8, activation="relu"),
+            keras.layers.Dense(units=10, activation="relu"),
+            keras.layers.Dropout(0.4),
+            keras.layers.Dense(units=10, activation="relu"),
+            keras.layers.Dropout(0.2),
+            keras.layers.Dense(units=10, activation="relu"),
             # the output layer, with a single neuron
             keras.layers.Dense(units=1, activation="sigmoid"),
         ]
@@ -500,7 +506,7 @@ if __name__ == "__main__":
     )
 
     history = model.fit(X_train, y_train,
-                        epochs=200,
+                        epochs=70,
                         batch_size=1024,
                         validation_data=(X_val, y_val),
                         verbose=0,
@@ -523,11 +529,5 @@ if __name__ == "__main__":
     plt.legend(loc='lower right')
     plt.show()
 
-    results = model.evaluate(test_X, test_y, batch_size=1000)
+    results = model.evaluate(test_X, test_y, batch_size=500)
     print("test loss, test acc:", results)
-
-    # y_predictions = model.predict(test_X)
-    # accuracy = metrics.accuracy_score(y, y_predictions)
-    # confusion_matrix = metrics.confusion_matrix(y, y_predictions)
-    # print(f"Accuracy: {accuracy}")
-    # print(f"Confusion Matrix:\n {confusion_matrix}")
