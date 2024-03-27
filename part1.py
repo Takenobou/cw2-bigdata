@@ -18,6 +18,7 @@ from xgboost import XGBClassifier
 from tensorflow import keras
 from tensorflow.python.keras.callbacks import EarlyStopping
 
+
 def load_data(file_path):
     """Load the dataset from a CSV file."""
     return pd.read_csv(file_path)
@@ -237,7 +238,7 @@ def model_train(mdl, X, y):
     return mdl
 
 
-def model_test(mdl, X,y):
+def model_test(mdl, X, y):
     """Test the model using the testing set."""
     y_pred = mdl.predict(X) if hasattr(mdl, "predict") else mdl.predict_proba(X)[:, 1] >= 0.5
     accuracy = metrics.accuracy_score(y, y_pred)
@@ -410,13 +411,20 @@ if __name__ == "__main__":
               'age', 'num_lab_procedures', 'number_diagnoses', 'num_procedures', 'readmitted']
     rfe_subset_data = recursive_feature_elimination(processed_data[subset])
     rfe_test_set, rfe_training_set = split_data(rfe_subset_data)
-    test_set, training_set = split_data(processed_data[subset])
+
+    df = pd.get_dummies(processed_data)
+    features_to_drop = df.nunique()
+    features_to_drop = features_to_drop.loc[features_to_drop.values == 1].index
+    df = df.drop(features_to_drop, axis=1)
+
+    test_set, training_set = split_data(processed_data)
 
     # Handling imbalance with SMOTE
     sm = SMOTE(random_state=42)
-    X_train, y_train = sm.fit_resample(training_set.drop('readmitted', axis=1), training_set['readmitted'])
-    X_test, y_test = test_set.drop('readmitted', axis=1), test_set['readmitted']
-    X_rfe_train, y_rfe_train = sm.fit_resample(rfe_training_set.drop('readmitted', axis=1), rfe_training_set['readmitted'])
+    # X_train, y_train = sm.fit_resample(training_set.drop('readmitted', axis=1), training_set['readmitted'])
+    # X_test, y_test = test_set.drop('readmitted', axis=1), test_set['readmitted']
+    X_rfe_train, y_rfe_train = sm.fit_resample(rfe_training_set.drop('readmitted', axis=1),
+                                               rfe_training_set['readmitted'])
     X_rfe_test, y_rfe_test = rfe_test_set.drop('readmitted', axis=1), rfe_test_set['readmitted']
 
     # Train and test the Logistic Regression Model
@@ -431,16 +439,16 @@ if __name__ == "__main__":
     print("-" * 20)
 
     # Train and test the Random Forest Model
-    print("Training and testing Random Forest Model...")
-    crf = RandomForestClassifier(n_estimators=400, min_samples_leaf=5, max_depth=30, random_state=42, oob_score=True)
-    crf.fit(X_train, y_train)
-    print("Model training completed.")
-    print("Accuracy score for training data is: {:4.3f}".format(crf.score(X_train, y_train)))
-    print("Accuracy score for test data: {:4.3f}".format(crf.score(X_train, y_train)))
-    print("The Oob score is: {:4.3f}".format(crf.oob_score_))
+    # print("Training and testing Random Forest Model...")
+    # crf = RandomForestClassifier(n_estimators=400, min_samples_leaf=5, max_depth=30, random_state=42, oob_score=True)
+    # crf.fit(X_train, y_train)
+    # print("Model training completed.")
+    # print("Accuracy score for training data is: {:4.3f}".format(crf.score(X_train, y_train)))
+    # print("Accuracy score for test data: {:4.3f}".format(crf.score(X_train, y_train)))
+    # print("The Oob score is: {:4.3f}".format(crf.oob_score_))
 
     # Test Random Forest Model
-    y_pred_rf = crf.predict(X_test)
+    # y_pred_rf = crf.predict(X_test)
     # print("Accuracy of Random Forest Model:", accuracy_score(y_test, y_pred_rf))
 
     ######################################################################
