@@ -1,7 +1,6 @@
 import pandas as pd
 import numpy as np
 import seaborn as sns
-import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 from sklearn.metrics import roc_auc_score
@@ -9,7 +8,9 @@ from sklearn.model_selection import train_test_split
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
 from sklearn.preprocessing import StandardScaler
-from torch.optim.lr_scheduler import StepLR
+from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.nn import LeakyReLU
+
 
 def load_data(file_path):
     """Load the dataset from a CSV file."""
@@ -126,68 +127,9 @@ def preprocess_data(file_path):
     return df, shape_before, shape_after, numerical_features, categorical_features
 
 
-def plot_age_impact(df):
-    """Plot the impact of age on readmission."""
-    plt.figure(figsize=(12, 6))
-    age_plot = sns.barplot(x='age', y='readmitted', data=df, palette="coolwarm", hue='age', legend=False)
-    age_plot.set_title('Impact of Age on Readmission Rates')
-    age_plot.set_xlabel('Age Group')
-    age_plot.set_ylabel('Readmission Rate')
-    plt.xticks(rotation=45)
-    plt.tight_layout()
-    plt.show()
-
-
-def plot_race_impact(df):
-    """Plot the impact of race on readmission."""
-    plt.figure(figsize=(12, 6))
-    race_plot = sns.barplot(x='race', y='readmitted', data=df, palette="muted", hue='race', legend=False)
-    race_plot.set_title('Readmission Rates by Race')
-    race_plot.set_xlabel('Race')
-    race_plot.set_ylabel('Readmission Rate')
-    plt.xticks(rotation=45)
-    plt.tight_layout()
-    plt.show()
-
-
-def plot_gender_impact(df):
-    """Plot the impact of gender on readmission."""
-    plt.figure(figsize=(12, 6))
-    gender_plot = sns.barplot(x='gender', y='readmitted', data=df, palette="pastel", hue='gender', legend=False)
-    gender_plot.set_title('Readmission Rates by Gender')
-    gender_plot.set_xlabel('Gender')
-    gender_plot.set_ylabel('Readmission Rate')
-    plt.tight_layout()
-    plt.show()
-
-
 def transform_readmitted_column(df):
     """Transform the readmitted column into binary (0, 1)."""
     df['readmitted'] = df['readmitted'].apply(lambda x: 0 if x == 'NO' else 1)
-
-
-def plot_diagnosis_impact(df, diagnosis_column='diag_1'):
-    """Plot the impact of diagnosis types on readmission."""
-    plt.figure(figsize=(14, 7))
-    diag_plot = sns.countplot(x=diagnosis_column, hue='readmitted', data=df, palette="deep")
-    diag_plot.set_title('Readmission Rates by Diagnosis Type')
-    diag_plot.set_xlabel('Diagnosis Type')
-    diag_plot.set_ylabel('Count')
-    plt.xticks(rotation=90)
-    plt.tight_layout()
-    plt.show()
-
-
-def plot_diagnosis_category_impact(df):
-    """Plot the impact of diagnosis categories on readmission."""
-    plt.figure(figsize=(14, 7))
-    diag_plot = sns.countplot(x='diag_1_category', hue='readmitted', data=df, palette="deep")
-    diag_plot.set_title('Readmission Rates by Primary Diagnosis Category')
-    diag_plot.set_xlabel('Primary Diagnosis Category')
-    diag_plot.set_ylabel('Count')
-    plt.xticks(rotation=45)
-    plt.tight_layout()
-    plt.show()
 
 
 def transform_data_for_model(df, numerical_features, target_column='readmitted'):
@@ -199,7 +141,6 @@ def transform_data_for_model(df, numerical_features, target_column='readmitted')
 
 class DiabetesDataset(torch.utils.data.Dataset):
     """Diabetes dataset."""
-
     def __init__(self, features, labels):
         self.features = features
         self.labels = labels
@@ -216,14 +157,17 @@ class BinaryClassificationModel(nn.Module):
         super(BinaryClassificationModel, self).__init__()
         self.network = nn.Sequential(
             nn.Linear(input_size, 256),
-            nn.ReLU(),
+            LeakyReLU(0.01),
             nn.BatchNorm1d(256),
+            nn.Dropout(0.5),
             nn.Linear(256, 128),
-            nn.ReLU(),
+            LeakyReLU(0.01),
             nn.BatchNorm1d(128),
+            nn.Dropout(0.5),
             nn.Linear(128, 64),
-            nn.ReLU(),
+            LeakyReLU(0.01),
             nn.BatchNorm1d(64),
+            nn.Dropout(0.5),
             nn.Linear(64, 1),
         )
 
@@ -273,7 +217,7 @@ def train_and_validate_model(model, train_loader, val_loader, criterion, optimiz
             f'Val Loss: {avg_val_loss:.4f}, '
             f'Val AUC: {avg_val_auc:.4f}')
 
-        scheduler.step()
+        scheduler.step(avg_val_loss)
 
 
 if __name__ == "__main__":
@@ -306,7 +250,7 @@ if __name__ == "__main__":
     model = BinaryClassificationModel(input_size=X_train_scaled.shape[1])
     criterion = nn.BCEWithLogitsLoss()
     optimizer = AdamW(model.parameters(), lr=0.001, weight_decay=0.01)
-    scheduler = StepLR(optimizer, step_size=50, gamma=0.1)
+    scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
 
     # Train and validate the model
-    train_and_validate_model(model, train_loader, val_loader, criterion, optimizer, scheduler, num_epochs=50)
+    train_and_validate_model(model, train_loader, val_loader, criterion, optimizer, scheduler, num_epochs=40)
