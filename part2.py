@@ -242,11 +242,7 @@ def preprocess_and_encode_data(df, numerical_features, categorical_features):
     return X_processed, y_processed
 
 
-if __name__ == "__main__":
-    file_path = 'diabetic_data.csv'
-    sns.set(style="whitegrid")
-
-    processed_data, shape_before, shape_after, numerical_features, categorical_features = preprocess_data(file_path)
+def run_torch_with_smote_model(processed_data):
     transform_readmitted_column(processed_data)
 
     # Preprocess and encode data
@@ -285,3 +281,11 @@ if __name__ == "__main__":
 
     # Train and validate the model
     train_and_validate_model(model, train_loader, val_loader, criterion, optimizer, scheduler, num_epochs=15)
+
+if __name__ == "__main__":
+    file_path = 'diabetic_data.csv'
+    sns.set(style="whitegrid")
+
+    processed_data, shape_before, shape_after, numerical_features, categorical_features = preprocess_data(file_path)
+    run_torch_with_smote_model(processed_data)
+
