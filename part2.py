@@ -3,6 +3,7 @@ import numpy as np
 import seaborn as sns
 import torch
 import torch.nn as nn
+from matplotlib import pyplot as plt
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import train_test_split
 from torch.optim import AdamW
@@ -178,6 +179,8 @@ class BinaryClassificationModel(nn.Module):
 
 
 def train_and_validate_model(model, train_loader, val_loader, criterion, optimizer, scheduler, num_epochs=10):
+    train_losses, val_losses, train_aucs, val_aucs = [], [], [], []
+
     for epoch in range(num_epochs):
         model.train()
         total_train_loss, total_train_auc, valid_batches = 0, 0, 0
@@ -190,13 +193,15 @@ def train_and_validate_model(model, train_loader, val_loader, criterion, optimiz
             optimizer.step()
             total_train_loss += loss.item()
 
-            unique_classes = np.unique(labels.cpu().numpy())
-            if len(unique_classes) > 1:
+            if len(np.unique(labels.cpu().numpy())) > 1:
                 valid_batches += 1
                 auc = roc_auc_score(labels.cpu().detach().numpy(), outputs.sigmoid().detach().cpu().numpy())
                 total_train_auc += auc
 
+        avg_train_loss = total_train_loss / len(train_loader)
         avg_train_auc = total_train_auc / valid_batches if valid_batches > 0 else 0
+        train_losses.append(avg_train_loss)
+        train_aucs.append(avg_train_auc)
 
         # Validation phase
         model.eval()
@@ -208,16 +213,20 @@ def train_and_validate_model(model, train_loader, val_loader, criterion, optimiz
                 loss = criterion(outputs, labels)
                 total_val_loss += loss.item()
 
-                unique_classes = np.unique(labels.cpu().numpy())
-                if len(unique_classes) > 1:
+                if len(np.unique(labels.cpu().numpy())) > 1:
                     valid_batches += 1
                     auc = roc_auc_score(labels.cpu().numpy(), outputs.sigmoid().cpu().numpy())
                     total_val_auc += auc
 
+        avg_val_loss = total_val_loss / len(val_loader)
         avg_val_auc = total_val_auc / valid_batches if valid_batches > 0 else 0
+        val_losses.append(avg_val_loss)
+        val_aucs.append(avg_val_auc)
 
-        print(f'Epoch {epoch + 1}/{num_epochs}, Train Loss: {total_train_loss / len(train_loader):.4f}, Train AUC: {avg_train_auc:.4f}, Val Loss: {total_val_loss / len(val_loader):.4f}, Val AUC: {avg_val_auc:.4f}')
-        scheduler.step(total_val_loss / len(val_loader))
+        print(f'Epoch {epoch + 1}/{num_epochs}, Train Loss: {avg_train_loss:.4f}, Train AUC: {avg_train_auc:.4f}, Val Loss: {avg_val_loss:.4f}, Val AUC: {avg_val_auc:.4f}')
+        scheduler.step(avg_val_loss)
+
+    return train_losses, val_losses, train_aucs, val_aucs
 
 
 def preprocess_and_encode_data(df, numerical_features, categorical_features):
@@ -280,7 +289,43 @@ def run_torch_with_smote_model(processed_data):
     scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
 
     # Train and validate the model
-    train_and_validate_model(model, train_loader, val_loader, criterion, optimizer, scheduler, num_epochs=15)
+    train_losses, val_losses, train_aucs, val_aucs = train_and_validate_model(model, train_loader, val_loader, criterion, optimizer, scheduler, num_epochs=10)
+
+    plt.figure(figsize=(10, 5))
+    plt.plot(train_losses, label='Training Loss')
+    plt.plot(val_losses, label='Validation Loss')
+    plt.title('Training and Validation Loss per Epoch')
+    plt.xlabel('Epochs')
+    plt.ylabel('Loss')
+    plt.legend()
+    plt.show()
+
+    # Plotting AUC
+    plt.figure(figsize=(10, 5))
+    plt.plot(train_aucs, label='Training AUC')
+    plt.plot(val_aucs, label='Validation AUC')
+    plt.title('Training and Validation AUC per Epoch')
+    plt.xlabel('Epochs')
+    plt.ylabel('AUC')
+    plt.legend()
+    plt.show()
+
+    from sklearn.metrics import classification_report, confusion_matrix
+
+    # Assuming `y_test` and `model` are available
+    y_pred = model(torch.tensor(X_test_dense).float()).detach().numpy()
+    y_pred = (y_pred > 0.5).astype(int)  # Assuming a binary classification with a threshold of 0.5
+
+    print(classification_report(y_test_array, y_pred))
+    conf_matrix = confusion_matrix(y_test_array, y_pred)
+
+    # Plotting the confusion matrix
+    sns.heatmap(conf_matrix, annot=True, fmt='d', cmap='Blues', xticklabels=['No', 'Yes'], yticklabels=['No', 'Yes'])
+    plt.xlabel('Predicted')
+    plt.ylabel('True')
+    plt.title('Confusion Matrix')
+    plt.show()
+
 
 if __name__ == "__main__":
     file_path = 'diabetic_data.csv'
