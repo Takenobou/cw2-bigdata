@@ -28,7 +28,6 @@ from torch.optim import AdamW
 from torch.utils.data import DataLoader
 from sklearn.preprocessing import StandardScaler
 from torch.optim.lr_scheduler import StepLR
-from xgboost import XGBClassifier
 
 
 def load_data(file_path):
@@ -255,6 +254,7 @@ def model_test(mdl, X, y):
     print(f"Confusion Matrix:\n {confusion_matrix}")
     return mdl
 
+
 def plot_roc_curve(mdl, X, y):
     prob = np.array(mdl.predict_proba(X)[:, 1])
     y += 1
@@ -307,8 +307,6 @@ def elbow_method(df, numerical_features):
     plt.xlabel('Number of clusters')
     plt.ylabel('WCSS')
     plt.show()
-
-
 
 
 def apply_kmeans(df, num_clusters):
@@ -450,7 +448,6 @@ if __name__ == "__main__":
     # plot_diagnosis_category_impact(processed_data)
     # elbow_method(processed_data, numerical_features)
 
-
     # Prepare the dataset for model building
     subset = ['num_medications', 'number_outpatient', 'number_emergency', 'time_in_hospital', 'number_inpatient',
               'age', 'num_lab_procedures', 'number_diagnoses', 'num_procedures', 'readmitted']
@@ -464,27 +461,26 @@ if __name__ == "__main__":
 
     test_set, training_set = split_data(pd.get_dummies(processed_data))
 
-    # # Handling imbalance with SMOTE
-    # sm = SMOTE(random_state=96)
-    # X_train, y_train = sm.fit_resample(training_set.drop('readmitted', axis=1), training_set['readmitted'])
-    # X_test, y_test = test_set.drop('readmitted', axis=1), test_set['readmitted']
-    # X_rfe_train, y_rfe_train = sm.fit_resample(rfe_training_set.drop('readmitted', axis=1),
-    #                                            rfe_training_set['readmitted'])
-    # X_rfe_test, y_rfe_test = rfe_test_set.drop('readmitted', axis=1), rfe_test_set['readmitted']
-    # X_rfe_set, y_rfe_set = rfe_subset_data.drop('readmitted', axis=1), rfe_subset_data['readmitted']
-    #
-    # # Train and test the Logistic Regression Model
-    # print("-" * 20)
-    # print("Training and testing Logistic Regression Model...")
-    # lr_model = LogisticRegression()
-    # lr_model = model_train(lr_model, X_rfe_train, y_rfe_train)
-    # print("Model training completed.")
-    #
-    # # Test Logistic Regression Model
-    # lr_model=model_test(lr_model, X_rfe_test, y_rfe_test)
-    # cross_validate_model(lr_model, X_rfe_set, y_rfe_set)
-    # plot_roc_curve(lr_model, X_rfe_test, y_rfe_test)
+    # Handling imbalance with SMOTE
+    sm = SMOTEENN(random_state=96)
+    X_train, y_train = sm.fit_resample(training_set.drop('readmitted', axis=1), training_set['readmitted'])
+    X_test, y_test = test_set.drop('readmitted', axis=1), test_set['readmitted']
+    X_rfe_train, y_rfe_train = sm.fit_resample(rfe_training_set.drop('readmitted', axis=1),
+                                               rfe_training_set['readmitted'])
+    X_rfe_test, y_rfe_test = rfe_test_set.drop('readmitted', axis=1), rfe_test_set['readmitted']
+    X_rfe_set, y_rfe_set = rfe_subset_data.drop('readmitted', axis=1), rfe_subset_data['readmitted']
 
+    # Train and test the Logistic Regression Model
+    print("-" * 20)
+    print("Training and testing Logistic Regression Model...")
+    lr_model = LogisticRegression()
+    lr_model = model_train(lr_model, X_rfe_train, y_rfe_train)
+    print("Model training completed.")
+
+    # Test Logistic Regression Model
+    lr_model = model_test(lr_model, X_rfe_test, y_rfe_test)
+    cross_validate_model(lr_model, X_rfe_set, y_rfe_set)
+    plot_roc_curve(lr_model, X_rfe_test, y_rfe_test)
 
     print("-" * 40)
     df_crs = processed_data
@@ -523,7 +519,7 @@ if __name__ == "__main__":
 
     # Proceed with training and evaluation
     crf = RandomForestClassifier(n_jobs=-1, n_estimators=400, min_samples_leaf=5, oob_score=True,
-                                 criterion='log_loss', max_depth=10, random_state=42)
+                                 max_depth=10, random_state=42)
     crf.fit(X_train_crf, y_train_crf)
 
     # Evaluation
@@ -652,5 +648,3 @@ if __name__ == "__main__":
     #
     # # Train and validate the model
     # train_and_validate_model(model, train_loader, val_loader, criterion, optimizer, scheduler, num_epochs=30)
-
-
