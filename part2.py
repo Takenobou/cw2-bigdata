@@ -10,7 +10,9 @@ from torch.utils.data import DataLoader
 from sklearn.preprocessing import StandardScaler
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.nn import LeakyReLU
-
+from sklearn.preprocessing import OneHotEncoder
+from imblearn.over_sampling import SMOTE
+from imblearn.pipeline import Pipeline as ImblearnPipeline
 
 def load_data(file_path):
     """Load the dataset from a CSV file."""
@@ -177,10 +179,8 @@ class BinaryClassificationModel(nn.Module):
 
 def train_and_validate_model(model, train_loader, val_loader, criterion, optimizer, scheduler, num_epochs=10):
     for epoch in range(num_epochs):
-        model.train()  # Set model to training mode
-        total_train_loss, total_train_auc = 0, 0
-
-        # Training phase
+        model.train()
+        total_train_loss, total_train_auc, valid_batches = 0, 0, 0
         for inputs, labels in train_loader:
             inputs, labels = inputs.float(), labels.float()
             optimizer.zero_grad()
@@ -189,35 +189,57 @@ def train_and_validate_model(model, train_loader, val_loader, criterion, optimiz
             loss.backward()
             optimizer.step()
             total_train_loss += loss.item()
-            auc = roc_auc_score(labels.cpu().detach().numpy(), outputs.cpu().detach().numpy())
-            total_train_auc += auc
 
-        avg_train_loss = total_train_loss / len(train_loader)
-        avg_train_auc = total_train_auc / len(train_loader)
+            unique_classes = np.unique(labels.cpu().numpy())
+            if len(unique_classes) > 1:
+                valid_batches += 1
+                auc = roc_auc_score(labels.cpu().detach().numpy(), outputs.sigmoid().detach().cpu().numpy())
+                total_train_auc += auc
+
+        avg_train_auc = total_train_auc / valid_batches if valid_batches > 0 else 0
 
         # Validation phase
-        model.eval()  # Set model to evaluation mode
-        total_val_loss, total_val_auc = 0, 0
+        model.eval()
+        total_val_loss, total_val_auc, valid_batches = 0, 0, 0
         with torch.no_grad():
             for inputs, labels in val_loader:
                 inputs, labels = inputs.float(), labels.float()
                 outputs = model(inputs).squeeze()
                 loss = criterion(outputs, labels)
                 total_val_loss += loss.item()
-                auc = roc_auc_score(labels.cpu().numpy(), outputs.cpu().numpy())
-                total_val_auc += auc
 
-        avg_val_loss = total_val_loss / len(val_loader)
-        avg_val_auc = total_val_auc / len(val_loader)
+                unique_classes = np.unique(labels.cpu().numpy())
+                if len(unique_classes) > 1:
+                    valid_batches += 1
+                    auc = roc_auc_score(labels.cpu().numpy(), outputs.sigmoid().cpu().numpy())
+                    total_val_auc += auc
 
-        print(
-            f'Epoch {epoch + 1}/{num_epochs}, '
-            f'Train Loss: {avg_train_loss:.4f}, '
-            f'Train AUC: {avg_train_auc:.4f}, '
-            f'Val Loss: {avg_val_loss:.4f}, '
-            f'Val AUC: {avg_val_auc:.4f}')
+        avg_val_auc = total_val_auc / valid_batches if valid_batches > 0 else 0
 
-        scheduler.step(avg_val_loss)
+        print(f'Epoch {epoch + 1}/{num_epochs}, Train Loss: {total_train_loss / len(train_loader):.4f}, Train AUC: {avg_train_auc:.4f}, Val Loss: {total_val_loss / len(val_loader):.4f}, Val AUC: {avg_val_auc:.4f}')
+        scheduler.step(total_val_loss / len(val_loader))
+
+
+def preprocess_and_encode_data(df, numerical_features, categorical_features):
+    """Preprocess and encode the data for model training and testing."""
+    # Convert categorical features to string type to avoid type mismatch issues
+    for feature in categorical_features:
+        df[feature] = df[feature].astype(str)
+
+    # Separating the features and the target
+    X = df[numerical_features + categorical_features]
+    y = df['readmitted']
+
+    # Define a pipeline for handling preprocessing steps
+    preprocessing_pipeline = ImblearnPipeline([
+        ('encoder', OneHotEncoder()),  # Encode categorical features
+        ('scaler', StandardScaler(with_mean=False)),  # Scale numerical features, avoiding mean subtraction
+        ('smote', SMOTE(random_state=42))  # Handle class imbalance
+    ])
+
+    # Process features and target
+    X_processed, y_processed = preprocessing_pipeline.fit_resample(X, y)
+    return X_processed, y_processed
 
 
 if __name__ == "__main__":
@@ -226,31 +248,40 @@ if __name__ == "__main__":
 
     processed_data, shape_before, shape_after, numerical_features, categorical_features = preprocess_data(file_path)
     transform_readmitted_column(processed_data)
-    X, y = transform_data_for_model(processed_data, numerical_features)
-    X_train, X_temp, y_train, y_temp = train_test_split(X, y, test_size=0.3, random_state=42)
-    X_val, X_test, y_val, y_test = train_test_split(X_temp, y_temp, test_size=0.5, random_state=42)
 
-    # Normalise features
-    scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
-    X_val_scaled = scaler.transform(X_val)
-    X_test_scaled = scaler.transform(X_test)
+    # Preprocess and encode data
+    X_processed, y_processed = preprocess_and_encode_data(processed_data, numerical_features, categorical_features)
+    X_train, X_temp, y_train, y_temp = train_test_split(X_processed, y_processed, test_size=0.3, random_state=42,
+                                                        stratify=y_processed)
+    X_val, X_test, y_val, y_test = train_test_split(X_temp, y_temp, test_size=0.5, random_state=42, stratify=y_temp)
+
+    # Convert sparse matrices to dense arrays before creating tensors
+    X_train_dense = X_train.toarray() if hasattr(X_train, 'toarray') else X_train
+    X_val_dense = X_val.toarray() if hasattr(X_val, 'toarray') else X_val
+    X_test_dense = X_test.toarray() if hasattr(X_test, 'toarray') else X_test
+
+    # Convert pandas Series to numpy arrays explicitly and ensure correct data type
+    y_train_array = y_train.to_numpy().astype(float)
+    y_val_array = y_val.to_numpy().astype(float)
+    y_test_array = y_test.to_numpy().astype(float)
+
+    print("Training set class distribution:", np.bincount(y_train_array.astype(int)))
+    print("Validation set class distribution:", np.bincount(y_val_array.astype(int)))
 
     # Create DataLoaders for both training and validation sets
-    train_dataset = DiabetesDataset(torch.tensor(X_train_scaled, dtype=torch.float32),
-                                    torch.tensor(y_train, dtype=torch.float32))
-    val_dataset = DiabetesDataset(torch.tensor(X_val_scaled, dtype=torch.float32),
-                                  torch.tensor(y_val, dtype=torch.float32))
+    train_dataset = DiabetesDataset(torch.tensor(X_train_dense, dtype=torch.float32),
+                                    torch.tensor(y_train_array, dtype=torch.float32))
+    val_dataset = DiabetesDataset(torch.tensor(X_val_dense, dtype=torch.float32),
+                                  torch.tensor(y_val_array, dtype=torch.float32))
 
     train_loader = DataLoader(dataset=train_dataset, batch_size=64, shuffle=True)
-    val_loader = DataLoader(dataset=val_dataset, batch_size=64,
-                            shuffle=False)
+    val_loader = DataLoader(dataset=val_dataset, batch_size=64, shuffle=False)
 
-    # Define model, criterion, and optimiser with a smaller learning rate
-    model = BinaryClassificationModel(input_size=X_train_scaled.shape[1])
+    # Corrected model initialization
+    model = BinaryClassificationModel(input_size=X_train_dense.shape[1])
     criterion = nn.BCEWithLogitsLoss()
     optimizer = AdamW(model.parameters(), lr=0.001, weight_decay=0.01)
     scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
 
     # Train and validate the model
-    train_and_validate_model(model, train_loader, val_loader, criterion, optimizer, scheduler, num_epochs=40)
+    train_and_validate_model(model, train_loader, val_loader, criterion, optimizer, scheduler, num_epochs=15)
