@@ -235,8 +235,8 @@ def model_train(mdl, X, y):
         print(f'Intercept: {mdl.intercept_}\n')
     if hasattr(mdl, 'coef_'):
         print(f'Coefficients: {mdl.coef_}')
-        # for feat, coef in zip(X.columns, mdl.coef_[0]):
-        #     print(f"{feat}: {coef}")
+        for feat, coef in zip(X.columns, mdl.coef_[0]):
+            print(f"{feat}: {coef}")
         print(f"Model score against training data: {mdl.score(X, y)}")
 
     # For Random Forest or other tree-based models, you might want to print feature importances instead
@@ -248,7 +248,7 @@ def model_train(mdl, X, y):
 
 def model_test(mdl, X, y):
     """Test the model using the testing set."""
-    y_pred = mdl.predict(X) if hasattr(mdl, "predict") else mdl.predict_proba(X)[:, 1] >= 0.42
+    y_pred = mdl.predict_proba(X)[:, 1] >= 0.56
     accuracy = metrics.accuracy_score(y, y_pred)
     confusion_matrix = metrics.confusion_matrix(y, y_pred)
     print(f"Accuracy: {accuracy}")
@@ -282,7 +282,7 @@ def recursive_feature_elimination(df):
     X0 = standardizer.fit_transform(X)
     X0 = pd.DataFrame(X0, index=X.index, columns=X.columns)
     # Apply RFE
-    mod = linear_model.LogisticRegression(max_iter=2000)
+    mod = linear_model.LogisticRegression(max_iter=1000)
     selector = feature_selection.RFE(mod, n_features_to_select=6, verbose=1, step=1)
     selector = selector.fit(X0, y)
     r_features = X.loc[:, selector.support_]
