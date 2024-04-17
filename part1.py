@@ -3,17 +3,22 @@ import numpy as np
 import seaborn as sns
 import matplotlib.pyplot as plt
 from distributed.protocol import torch
+from imblearn.combine import SMOTETomek, SMOTEENN
 from imblearn.over_sampling import SMOTE
 from sklearn import linear_model, preprocessing
 from sklearn.cluster import KMeans
-from sklearn.decomposition import PCA
+from sklearn.compose import ColumnTransformer
+from sklearn.decomposition import PCA, TruncatedSVD
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.feature_selection import SelectFromModel
 from sklearn.impute import SimpleImputer, KNNImputer
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import accuracy_score, roc_auc_score
+from sklearn.metrics import accuracy_score, roc_auc_score, classification_report, confusion_matrix, roc_curve
 from sklearn.model_selection import train_test_split, cross_val_score, GridSearchCV, KFold
 from sklearn import feature_selection, metrics
-from sklearn.preprocessing import StandardScaler, PolynomialFeatures, MinMaxScaler
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler, PolynomialFeatures, MinMaxScaler, LabelEncoder, OneHotEncoder, \
+    RobustScaler
 from sklearn.svm import SVC
 import torch
 import torch.nn as nn
@@ -24,8 +29,6 @@ from torch.utils.data import DataLoader
 from sklearn.preprocessing import StandardScaler
 from torch.optim.lr_scheduler import StepLR
 from xgboost import XGBClassifier
-from tensorflow import keras
-from tensorflow.python.keras.callbacks import EarlyStopping
 
 
 def load_data(file_path):
@@ -129,8 +132,6 @@ def preprocess_data(file_path):
     drop_low_variance_columns(df)
     transform_age_ranges(df)
     replace_missing_diagnoses(df)
-    # engineer_features(df)
-    # reduce_dimensions(df, n_components=0.95)
     drop_all_missing_rows(df)
 
     # Map diagnosis codes to categories
@@ -140,8 +141,6 @@ def preprocess_data(file_path):
     numerical_features, categorical_features = identify_features(df)
     df = remove_outliers(df, numerical_features)
     remove_duplicate_patients(df)
-    normalize_features(df)
-    # df = apply_pca(df, n_components=0.95)
 
     shape_after = df.shape
     return df, shape_before, shape_after, numerical_features, categorical_features
@@ -273,6 +272,7 @@ def cross_validate_model(mdl, X, y):
     print(f"Cross-validated scores: {scores}")
     print(f"Mean accuracy: {scores.mean()}")
 
+
 def recursive_feature_elimination(df):
     """Apply recursive feature elimination to the dataset."""
     X = df.loc[:, df.columns != 'readmitted']
@@ -282,8 +282,8 @@ def recursive_feature_elimination(df):
     X0 = standardizer.fit_transform(X)
     X0 = pd.DataFrame(X0, index=X.index, columns=X.columns)
     # Apply RFE
-    mod = linear_model.LogisticRegression(max_iter=1000)
-    selector = feature_selection.RFE(mod, n_features_to_select=5, verbose=1, step=1)
+    mod = linear_model.LogisticRegression(max_iter=2000)
+    selector = feature_selection.RFE(mod, n_features_to_select=6, verbose=1, step=1)
     selector = selector.fit(X0, y)
     r_features = X.loc[:, selector.support_]
     print("R features are:\n{}".format(','.join(list(r_features))))
@@ -292,95 +292,46 @@ def recursive_feature_elimination(df):
     return r_features
 
 
-def find_optimal_clusters(data):
-    distortions = []
-    K = range(1, 11)
-    for k in K:
-        kmeanModel = KMeans(n_clusters=k)
-        kmeanModel.fit(data)
-        distortions.append(kmeanModel.inertia_)
+def elbow_method(df, numerical_features):
+    """Use the elbow method to determine the optimal number of clusters."""
+    data = df[numerical_features]
+    wcss = []
+    for i in range(1, 11):
+        kmeans = KMeans(n_clusters=i, max_iter=300, n_init='auto')
+        kmeans.fit(data)
+        wcss.append(kmeans.inertia_)
 
-    plt.figure(figsize=(10, 5))
-    plt.plot(K, distortions, 'bx-')
-    plt.xlabel('k')
-    plt.ylabel('Distortion')
-    plt.title('The Elbow Method showing the optimal k')
+    plt.figure(figsize=(10, 8))
+    plt.plot(range(1, 11), wcss)
+    plt.title('Elbow Method')
+    plt.xlabel('Number of clusters')
+    plt.ylabel('WCSS')
     plt.show()
 
 
-def engineer_features(df):
-    """Further engineer features with advanced techniques."""
-    # Base features
-    df['medical_history_complexity'] = df[
-        ['num_medications', 'number_outpatient', 'number_emergency', 'number_inpatient']].sum(axis=1)
 
+
+def apply_kmeans(df, num_clusters):
+    # Scaling the features before applying K-Means
     scaler = StandardScaler()
-    df['medical_history_complexity_standardized'] = scaler.fit_transform(df[['medical_history_complexity']])
+    df_scaled = scaler.fit_transform(df[numerical_features])  # Assuming 'numerical_features' is defined
 
-    # Interaction features refinement
-    df['medication_emergency_interaction'] = df['num_medications'] * np.log1p(df['number_emergency'])
-    df['outpatient_inpatient_ratio'] = df['number_outpatient'] / (df['number_inpatient'] + 1)
+    # Apply K-Means
+    kmeans = KMeans(n_clusters=num_clusters, random_state=42, n_init='auto')
+    clusters = kmeans.fit_predict(df_scaled)
+    df['Cluster'] = clusters
 
-    # Polynomial features
-    pf = PolynomialFeatures(degree=2, include_bias=False)
-    key_features = df[['num_medications', 'number_outpatient', 'number_emergency', 'number_inpatient']].copy()
-    poly_features = pf.fit_transform(key_features)
-    for i, col_name in enumerate(pf.get_feature_names_out(key_features.columns)):
-        df[f'poly_{col_name}'] = poly_features[:, i]
+    # Analyze the cluster centroids
+    centroids = kmeans.cluster_centers_
+    print("Centroids of clusters:")
+    print(centroids)
 
-    # Clustering-based features
-    kmeans = KMeans(n_clusters=3, random_state=42)
-    df['cluster'] = kmeans.fit_predict(df[['medical_history_complexity_standardized', 'num_medications']])
+    # Plotting the distribution of clusters
+    sns.countplot(x='Cluster', data=df)
+    plt.title('Distribution of Clusters')
+    plt.show()
 
-    # Dynamic quantile for high risk with refined approach
-    for threshold in [0.6, 0.7, 0.8]:
-        df[f'high_risk_{threshold}'] = np.where(
-            df['medical_history_complexity_standardized'] > df['medical_history_complexity_standardized'].quantile(
-                threshold), 1, 0)
-
-    # Categorical risk level
-    df['risk_level'] = pd.qcut(df['medical_history_complexity_standardized'], q=[0, 0.25, 0.5, 0.75, 1],
-                               labels=['low', 'medium', 'high', 'very_high'])
-
-    return df
-
-
-def reduce_dimensions(df, n_components=0.95):
-    # Apply PCA to reduce dimensions
-    features = df.select_dtypes(include=[np.number])
-    pca = PCA(n_components=n_components)
-    principal_components = pca.fit_transform(features)
-    df_pca = pd.DataFrame(data=principal_components)
-    df.reset_index(drop=True, inplace=True)
-    df_pca.reset_index(drop=True, inplace=True)
-    df = pd.concat([df, df_pca], axis=1)
-    return df
-
-
-def normalize_features(df, exclude_columns=['age']):
-    """Normalize numerical features."""
-
-    numerical_features = df.select_dtypes(include=[np.number]).columns
-    features_to_normalize = numerical_features.difference(exclude_columns)
-    scaler = StandardScaler()
-    df[features_to_normalize] = scaler.fit_transform(df[features_to_normalize])
-
-
-def apply_pca(df, n_components=None):
-    # Separate out the numerical data
-    numerical_features = df.select_dtypes(include=[np.number]).columns.tolist()
-    numerical_data = df[numerical_features]
-
-    # Apply PCA
-    pca = PCA(n_components=n_components, random_state=42)
-    principalComponents = pca.fit_transform(numerical_data)
-
-    # Convert to dataframe and concatenate with original df
-    pca_df = pd.DataFrame(data=principalComponents, columns=[f'pc_{i}' for i in range(principalComponents.shape[1])])
-    df.reset_index(drop=True, inplace=True)  # Reset index to avoid concatenation issues
-    df = pd.concat([df, pca_df], axis=1)
-
-    return df
+    return df, centroids
 
 
 def normalize_data_min_max(df, numerical_features):
@@ -389,6 +340,7 @@ def normalize_data_min_max(df, numerical_features):
     df_normalized = (df_numerical - df_numerical.min()) / (df_numerical.max() - df_numerical.min())
     df[df_numerical.columns] = df_normalized
     return df
+
 
 def transform_data_for_model(df, numerical_features, target_column='readmitted'):
     """Prepare data for model training and testing."""
@@ -475,8 +427,6 @@ def train_and_validate_model(model, train_loader, val_loader, criterion, optimiz
         scheduler.step()
 
 
-
-
 if __name__ == "__main__":
     file_path = 'diabetic_data.csv'
     sns.set(style="whitegrid")
@@ -490,14 +440,16 @@ if __name__ == "__main__":
     print(f"Categorical features: {categorical_features}")
 
     # Normalize data
-    processed_data = normalize_data_min_max(processed_data, numerical_features)
+    # processed_data = normalize_data_min_max(processed_data, numerical_features)
 
     # Data exploration
     transform_readmitted_column(processed_data)
-    plot_age_impact(processed_data)
-    plot_race_impact(processed_data)
-    plot_gender_impact(processed_data)
-    plot_diagnosis_category_impact(processed_data)
+    # plot_age_impact(processed_data)
+    # plot_race_impact(processed_data)
+    # plot_gender_impact(processed_data)
+    # plot_diagnosis_category_impact(processed_data)
+    # elbow_method(processed_data, numerical_features)
+
 
     # Prepare the dataset for model building
     subset = ['num_medications', 'number_outpatient', 'number_emergency', 'time_in_hospital', 'number_inpatient',
@@ -512,72 +464,193 @@ if __name__ == "__main__":
 
     test_set, training_set = split_data(pd.get_dummies(processed_data))
 
-    # Handling imbalance with SMOTE
-    sm = SMOTE(random_state=96)
-    X_train, y_train = sm.fit_resample(training_set.drop('readmitted', axis=1), training_set['readmitted'])
-    X_test, y_test = test_set.drop('readmitted', axis=1), test_set['readmitted']
-    X_rfe_train, y_rfe_train = sm.fit_resample(rfe_training_set.drop('readmitted', axis=1),
-                                               rfe_training_set['readmitted'])
-    X_rfe_test, y_rfe_test = rfe_test_set.drop('readmitted', axis=1), rfe_test_set['readmitted']
-    X_rfe_set, y_rfe_set = rfe_subset_data.drop('readmitted', axis=1), rfe_subset_data['readmitted']
+    # # Handling imbalance with SMOTE
+    # sm = SMOTE(random_state=96)
+    # X_train, y_train = sm.fit_resample(training_set.drop('readmitted', axis=1), training_set['readmitted'])
+    # X_test, y_test = test_set.drop('readmitted', axis=1), test_set['readmitted']
+    # X_rfe_train, y_rfe_train = sm.fit_resample(rfe_training_set.drop('readmitted', axis=1),
+    #                                            rfe_training_set['readmitted'])
+    # X_rfe_test, y_rfe_test = rfe_test_set.drop('readmitted', axis=1), rfe_test_set['readmitted']
+    # X_rfe_set, y_rfe_set = rfe_subset_data.drop('readmitted', axis=1), rfe_subset_data['readmitted']
+    #
+    # # Train and test the Logistic Regression Model
+    # print("-" * 20)
+    # print("Training and testing Logistic Regression Model...")
+    # lr_model = LogisticRegression()
+    # lr_model = model_train(lr_model, X_rfe_train, y_rfe_train)
+    # print("Model training completed.")
+    #
+    # # Test Logistic Regression Model
+    # lr_model=model_test(lr_model, X_rfe_test, y_rfe_test)
+    # cross_validate_model(lr_model, X_rfe_set, y_rfe_set)
+    # plot_roc_curve(lr_model, X_rfe_test, y_rfe_test)
 
-    # Train and test the Logistic Regression Model
-    print("-" * 20)
-    print("Training and testing Logistic Regression Model...")
-    lr_model = LogisticRegression()
-    lr_model = model_train(lr_model, X_rfe_train, y_rfe_train)
-    print("Model training completed.")
 
-    # Test Logistic Regression Model
-    lr_model=model_test(lr_model, X_rfe_test, y_rfe_test)
-    cross_validate_model(lr_model, X_rfe_set, y_rfe_set)
-    plot_roc_curve(lr_model, X_rfe_test, y_rfe_test)
+    print("-" * 40)
+    df_crs = processed_data
+    shape_of_data = df_crs.shape
+    print(shape_of_data)
 
+    # Before you start encoding categorical features, convert them to strings
+    for col in df_crs.select_dtypes(include=['object']).columns:
+        df_crs[col] = df_crs[col].astype(str)
 
+    # Apply Polynomial Features to Numerical Features
+    poly_transformer = PolynomialFeatures(degree=2, include_bias=False)
+    X_poly = poly_transformer.fit_transform(df_crs[numerical_features])
+    poly_feature_names = poly_transformer.get_feature_names_out(numerical_features)
 
-    print("-" * 20)
+    # Drop the original numerical columns and add the polynomial features
+    df_crs.drop(columns=numerical_features, inplace=True)
+    df_crs_poly = pd.DataFrame(X_poly, columns=poly_feature_names, index=df_crs.index)
+    df_crs = pd.concat([df_crs, df_crs_poly], axis=1)
 
-    # Train and test the Random Forest Model
-    print("Training and testing Random Forest Model...")
-    crf = RandomForestClassifier(n_estimators=400, min_samples_leaf=5, max_depth=30, random_state=42, oob_score=True)
-    crf.fit(X_train, y_train)
-    print("Model training completed.")
-    print("Accuracy score for training data is: {:4.3f}".format(crf.score(X_train, y_train)))
-    print("Accuracy score for test data: {:4.3f}".format(crf.score(X_train, y_train)))
-    print("The Oob score is: {:4.3f}".format(crf.oob_score_))
+    # Encode categorical features
+    le = LabelEncoder()
+    for col in df_crs.select_dtypes(include=['object']).columns:
+        df_crs[col] = le.fit_transform(df_crs[col])
 
-    # Test Random Forest Model
-    y_pred_rf = crf.predict(X_test)
-    print("Accuracy of Random Forest Model:", accuracy_score(y_test, y_pred_rf))
+    # Separate features and target
+    X_crf = df_crs.drop('readmitted', axis=1)
+    y_crf = df_crs['readmitted']
 
-    # BCE model
-    X, y = transform_data_for_model(processed_data, numerical_features)
-    X_train, X_temp, y_train, y_temp = train_test_split(X, y, test_size=0.3, random_state=42)
-    X_val, X_test, y_val, y_test = train_test_split(X_temp, y_temp, test_size=0.5, random_state=42)
+    # Apply SMOTE to address class imbalance
+    sm = SMOTEENN(random_state=42)
+    X_res_crf, y_res_crf = sm.fit_resample(X_crf, y_crf)
 
-    # Normalise features
-    scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
-    X_val_scaled = scaler.transform(X_val)
-    X_test_scaled = scaler.transform(X_test)
+    X_train_crf, X_test_crf, y_train_crf, y_test_crf = train_test_split(X_res_crf, y_res_crf, test_size=0.25,
+                                                                        stratify=y_res_crf, random_state=69)
 
-    # Create DataLoaders for both training and validation sets
-    train_dataset = DiabetesDataset(torch.tensor(X_train_scaled, dtype=torch.float32),
-                                    torch.tensor(y_train, dtype=torch.float32))
-    val_dataset = DiabetesDataset(torch.tensor(X_val_scaled, dtype=torch.float32),
-                                  torch.tensor(y_val, dtype=torch.float32))
+    # Proceed with training and evaluation
+    crf = RandomForestClassifier(n_jobs=-1, n_estimators=400, min_samples_leaf=5, oob_score=True,
+                                 criterion='log_loss', max_depth=10, random_state=42)
+    crf.fit(X_train_crf, y_train_crf)
 
-    train_loader = DataLoader(dataset=train_dataset, batch_size=64, shuffle=True)
-    val_loader = DataLoader(dataset=val_dataset, batch_size=64,
-                            shuffle=False)
+    # Evaluation
+    train_score = crf.score(X_train_crf, y_train_crf)
+    test_score = crf.score(X_test_crf, y_test_crf)
 
-    # Define model, criterion, and optimiser with a smaller learning rate
-    model = BinaryClassificationModel(input_size=X_train_scaled.shape[1])
-    criterion = nn.BCEWithLogitsLoss()
-    optimizer = AdamW(model.parameters(), lr=0.001, weight_decay=0.01)
-    scheduler = StepLR(optimizer, step_size=50, gamma=0.1)
+    print("Training set shape:", X_train_crf.shape, y_train_crf.shape)
+    print("Test set shape:", X_test_crf.shape, y_test_crf.shape)
 
-    # Train and validate the model
-    train_and_validate_model(model, train_loader, val_loader, criterion, optimizer, scheduler, num_epochs=80)
+    print(f"Train score: {train_score:4.3f}")
+    print(f"Test score: {test_score:4.3f}")
+    print(f"The Oob score of the trained model is: {crf.oob_score_:4.3f}")
+
+    # # Normalize data
+    # scaler = StandardScaler()
+    # X_scaled = scaler.fit_transform(df_crs.drop('readmitted', axis=1))
+    #
+    # # Applying PCA to reduce dimensions for visualization
+    # pca = PCA(n_components=2)
+    # X_pca = pca.fit_transform(X_scaled)
+    #
+    # # Applying Kmeans
+    # kmeans = KMeans(n_clusters=3, random_state=42)
+    # y_kmeans = kmeans.fit_predict(X_pca)
+    #
+    # # Visualize clusters
+    # plt.figure(figsize=(8, 6))
+    # plt.scatter(X_pca[:, 0], X_pca[:, 1], c=y_kmeans, s=50, cmap='viridis')
+    # centers = kmeans.cluster_centers_
+    # plt.scatter(centers[:, 0], centers[:, 1], c='red', s=200, alpha=0.75)
+    # plt.title('Clusters visualization in 2D PCA-reduced space')
+    # plt.show()
+    #
+    # # Compare cluster distribution with the readmission feature
+    # df_crs['cluster'] = y_kmeans
+    # cluster_comparison = pd.crosstab(df_crs['cluster'], df_crs['readmitted'])
+    # print(cluster_comparison)
+    #
+    # age_cluster_cross_tab = pd.crosstab(index=[df_crs['cluster'], df_crs['readmitted']], columns=df_crs['age'])
+    # print(age_cluster_cross_tab)
+    #
+    # age_cluster_cross_tab.plot(kind='bar', stacked=True, figsize=(10, 7))
+    # plt.title('Age Distribution by Cluster and Readmission')
+    # plt.xlabel('Cluster and Readmission')
+    # plt.ylabel('Count')
+    # plt.show()
+    #
+    # race_mapping = {
+    #     0: 'Caucasian',
+    #     1: 'AfricanAmerican',
+    #     2: 'Hispanic',
+    #     3: 'Asian',
+    #     4: 'Other'}
+    #
+    # race_cluster_cross_tab = pd.crosstab(index=[df_crs['cluster'], df_crs['readmitted']], columns=df_crs['race'])
+    # race_cluster_cross_tab.rename(columns=race_mapping, inplace=True)
+    # print(race_cluster_cross_tab)
+    #
+    # race_cluster_cross_tab.plot(kind='bar', stacked=True, figsize=(10, 7))
+    # plt.title('Race Distribution by Cluster and Readmission')
+    # plt.xlabel('Cluster and Readmission')
+    # plt.ylabel('Count')
+    # plt.legend(title='Race')
+    # plt.show()
+
+    # Apply cross-validation on the resampled data
+    crossvalidation_crf = KFold(n_splits=10, shuffle=True, random_state=42)
+    cv_scores = cross_val_score(crf, X_res_crf, y_res_crf, scoring='accuracy', cv=crossvalidation_crf)
+
+    print("Cross-validation scores:", cv_scores)
+    print("Average cross-validation score for Random Forest: {:.4f}".format(np.mean(cv_scores)))
+
+    # Prediction on the test set
+    y_test_pred = crf.predict(X_test_crf)
+    y_train_pred = crf.predict(X_train_crf)
+
+    # Classification report and confusion matrix
+    print("Classification report for test:\n", classification_report(y_test_crf, y_test_pred))
+    print("Confusion Matrix:\n", confusion_matrix(y_test_crf, y_test_pred))
+
+    # ROC-AUC score
+    roc_auc = roc_auc_score(y_test_crf, crf.predict_proba(X_test_crf)[:, 1])
+    print("ROC-AUC Score:", roc_auc)
+
+    # Calculate the ROC curve
+    fpr, tpr, thresholds = roc_curve(y_test_crf, crf.predict_proba(X_test_crf)[:, 1])
+
+    # Plot ROC Curve
+    plt.figure()
+    plt.plot(fpr, tpr, color='darkorange', lw=2, label='ROC curve (area = %0.2f)' % roc_auc)
+    plt.plot([0, 1], [0, 1], color='navy', linestyle='--')
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive Rate')
+    plt.title('Receiver Operating Characteristic')
+    plt.legend(loc="lower right")
+    plt.show()
+
+    # # BCE model
+    # X, y = transform_data_for_model(processed_data, numerical_features)
+    # X_train, X_temp, y_train, y_temp = train_test_split(X, y, test_size=0.3, random_state=42)
+    # X_val, X_test, y_val, y_test = train_test_split(X_temp, y_temp, test_size=0.5, random_state=42)
+    #
+    # # Normalise features
+    # scaler = StandardScaler()
+    # X_train_scaled = scaler.fit_transform(X_train)
+    # X_val_scaled = scaler.transform(X_val)
+    # X_test_scaled = scaler.transform(X_test)
+    #
+    # # Create DataLoaders for both training and validation sets
+    # train_dataset = DiabetesDataset(torch.tensor(X_train_scaled, dtype=torch.float32),
+    #                                 torch.tensor(y_train, dtype=torch.float32))
+    # val_dataset = DiabetesDataset(torch.tensor(X_val_scaled, dtype=torch.float32),
+    #                               torch.tensor(y_val, dtype=torch.float32))
+    #
+    # train_loader = DataLoader(dataset=train_dataset, batch_size=64, shuffle=True)
+    # val_loader = DataLoader(dataset=val_dataset, batch_size=64,
+    #                         shuffle=False)
+    #
+    # # Define model, criterion, and optimiser with a smaller learning rate
+    # model = BinaryClassificationModel(input_size=X_train_scaled.shape[1])
+    # criterion = nn.BCEWithLogitsLoss()
+    # optimizer = AdamW(model.parameters(), lr=0.001, weight_decay=0.01)
+    # scheduler = StepLR(optimizer, step_size=50, gamma=0.1)
+    #
+    # # Train and validate the model
+    # train_and_validate_model(model, train_loader, val_loader, criterion, optimizer, scheduler, num_epochs=30)
 
 
